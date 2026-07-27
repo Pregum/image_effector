@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>NOIZ LAB — 画像エフェクト実験室</title>
+<meta name="description" content="ブラー・グリッチ・ピクセルソート・ディザ・CRT。ブラウザで完結する画像エフェクト実験室。AI画像生成にも対応。" />
+<meta property="og:title" content="NOIZ LAB — 画像エフェクト実験室" />
+<meta property="og:description" content="ブラー・グリッチ・ピクセルソート・ディザ・CRT。ブラウザで完結する画像エフェクト実験室。" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=DotGothic16&family=IBM+Plex+Mono:wght@400;600&family=Zen+Kaku+Gothic+New:wght@400;500&display=swap" rel="stylesheet" />
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' fill='%230b0d0c'/><rect x='2' y='2' width='5' height='5' fill='%23c8ff00'/><rect x='9' y='9' width='5' height='5' fill='%23ff3ea5'/></svg>" />
+<link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+<div class="crt-overlay" aria-hidden="true"></div>
+
+<header class="topbar">
+  <h1 class="logo" data-text="NOIZ LAB">NOIZ LAB</h1>
+  <span class="logo-sub">画像エフェクト実験室</span>
+  <div class="topbar-actions">
+    <button id="btn-open" class="btn">画像を開く</button>
+    <button id="btn-random" class="btn btn-alt" title="ランダムに効果をかける">◇ おまかせ</button>
+    <button id="btn-save" class="btn btn-primary">PNG保存</button>
+  </div>
+</header>
+
+<main class="layout">
+  <section class="stage" id="stage">
+    <div class="stage-inner">
+      <canvas id="view"></canvas>
+      <div class="drop-hint" id="drop-hint">
+        <p class="drop-hint-en">DROP IMAGE HERE</p>
+        <p>画像をドラッグ＆ドロップ / 貼り付け（⌘V）でも読み込めます</p>
+      </div>
+    </div>
+    <div class="stage-status">
+      <span id="status-res">—</span>
+      <label class="anim-toggle"><input type="checkbox" id="chk-anim" checked /> アニメーション</label>
+    </div>
+  </section>
+
+  <aside class="panel">
+    <div class="panel-section ai-box">
+      <h2 class="section-title">AI SOURCE <span class="jp">／ AIで元画像を生成</span></h2>
+      <div class="ai-row">
+        <input id="ai-prompt" type="text" maxlength="500" placeholder="例: 夕暮れの高速道路を走る古い車" />
+        <button id="btn-generate" class="btn btn-primary">生成</button>
+      </div>
+      <p class="ai-note" id="ai-note">Workers AI (FLUX.1 schnell) で生成します。日本語OK。</p>
+    </div>
+
+    <div class="panel-section">
+      <h2 class="section-title">PRESETS <span class="jp">／ プリセット</span></h2>
+      <div class="preset-row" id="presets"></div>
+    </div>
+
+    <div class="panel-section">
+      <h2 class="section-title">EFFECT RACK <span class="jp">／ エフェクトラック</span></h2>
+      <div id="rack"></div>
+    </div>
+
+    <footer class="panel-footer">
+      処理はすべてブラウザ内 (WebGL2) で完結。画像はAI生成時以外サーバーに送信されません。
+    </footer>
+  </aside>
+</main>
+
+<input type="file" id="file-input" accept="image/*" hidden />
+<script type="module" src="/app.js"></script>
+</body>
+</html>

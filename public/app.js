@@ -622,6 +622,10 @@ async function generate() {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ prompt }),
     });
+    if (res.status === 429) {
+      setNote("リクエストが多すぎます。1分ほど待ってから再試行してください。", true);
+      return;
+    }
     if (!res.ok) throw new Error(`status ${res.status}`);
     const blob = await res.blob();
     await loadBlob(blob);

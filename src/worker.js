@@ -1,3 +1,20 @@
+import { DurableObject } from "cloudflare:workers";
+
+const RATE_LIMIT = 5;       // 許可回数
+const WINDOW_MS = 60_000;   // ウィンドウ幅
+
+// IPごとに1インスタンス割り当てて固定ウィンドウでカウントする
+export class RateLimiter extends DurableObject {
+  async check() {
+    const now = Date.now();
+    let w = (await this.ctx.storage.get("w")) ?? null;
+    if (!w || now - w.start >= WINDOW_MS) w = { start: now, count: 0 };
+    w.count++;
+    await this.ctx.storage.put("w", w);
+    return w.count <= RATE_LIMIT;
+  }
+}
+
 const json = (obj, status = 200) =>
   new Response(JSON.stringify(obj), {
     status,
@@ -9,6 +26,11 @@ export default {
     const url = new URL(req.url);
 
     if (url.pathname === "/api/generate" && req.method === "POST") {
+      // IPごとのレート制限（5回/分）
+      const ip = req.headers.get("cf-connecting-ip") || "unknown";
+      const ok = await env.LIMITER.get(env.LIMITER.idFromName(ip)).check();
+      if (!ok) return json({ error: "rate limited" }, 429);
+
       let body;
       try {
         body = await req.json();

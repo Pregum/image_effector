@@ -72,6 +72,12 @@ export default {
           headers: { "content-type": "image/jpeg", "cache-control": "no-store" },
         });
       } catch (e) {
+        const msg = e?.message ?? String(e);
+        console.error("generation failed:", msg);
+        // Workers AI 無料枠(ニューロン)の使い切りは専用のステータスで返す
+        if (msg.includes("4006") || msg.includes("neurons")) {
+          return json({ error: "quota exceeded" }, 503);
+        }
         return json({ error: "generation failed" }, 500);
       }
     }

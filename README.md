@@ -3,7 +3,7 @@
 ブラウザ内 (WebGL2) で完結する画像エフェクトWebアプリ。
 Cloudflare Workers (静的アセット + Workers AI) でホスティング。
 
-**URL**: https://image-effector.pregum.workers.dev
+**URL**: https://image-effector.pregum-dev.workers.dev
 
 ## 機能
 

@@ -694,13 +694,254 @@ async function generate() {
     setNote("生成に失敗しました。少し待って再試行してください。", true);
   } finally {
     aiBtn.disabled = false;
-    aiBtn.textContent = "生成";
+    aiBtn.textContent = "写真";
   }
 }
 aiBtn.addEventListener("click", generate);
 aiPrompt.addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.isComposing) generate();
 });
+
+// ---------------------------------------------------------------- AIシーン生成（ベクター風）
+
+const HEX6 = /^#[0-9a-fA-F]{6}$/;
+const pickCol = (c, fb) => (typeof c === "string" && HEX6.test(c) ? c : fb);
+const pickNum = (v, lo, hi, fb) =>
+  typeof v === "number" && isFinite(v) ? Math.min(hi, Math.max(lo, v)) : fb;
+
+// LLMが設計したシーン仕様(JSON)をCanvasでベクター風に描画する。
+// 仕様は信用せず、全フィールドをクランプ・検証して不正値でも必ず描き切る。
+function renderScene(specIn) {
+  pendingParents = null;
+  const spec = specIn && typeof specIn === "object" ? specIn : {};
+  const w = 1200, h = 800;
+  const c = document.createElement("canvas");
+  c.width = w;
+  c.height = h;
+  const x = c.getContext("2d");
+  const rnd = srand(1 + Math.floor(Math.random() * 1e6));
+
+  // 空
+  const skyCols = (Array.isArray(spec.sky) ? spec.sky : []).filter((s) => HEX6.test(String(s)));
+  const sky = skyCols.length >= 2 ? skyCols.slice(0, 4) : ["#1b2735", "#3a1c4f", "#0d0d10"];
+  const g = x.createLinearGradient(0, 0, 0, h);
+  sky.forEach((cs, i) => g.addColorStop(i / (sky.length - 1), cs));
+  x.fillStyle = g;
+  x.fillRect(0, 0, w, h);
+
+  const horizon = pickNum(spec.horizon, 0.5, 0.9, 0.68) * h;
+
+  // 星
+  const stars = Math.round(pickNum(spec.stars, 0, 200, 0));
+  for (let i = 0; i < stars; i++) {
+    x.fillStyle = `rgba(255,255,255,${0.2 + rnd() * 0.6})`;
+    x.fillRect(rnd() * w, rnd() * horizon * 0.9, 2, 2);
+  }
+
+  // 太陽・月
+  const cel = spec.celestial && typeof spec.celestial === "object" ? spec.celestial : {};
+  const celType = cel.type === "moon" || cel.type === "none" ? cel.type : "sun";
+  const cx = pickNum(cel.x, 0.05, 0.95, 0.5) * w;
+  const cy = Math.min(pickNum(cel.y, 0.08, 0.9, 0.4) * h, horizon - 24);
+  const cr = pickNum(cel.r, 0.03, 0.16, 0.08) * w;
+  const celCol = pickCol(cel.color, celType === "moon" ? "#ffeecf" : "#ffd76e");
+  const glowCol = pickCol(cel.glow, celType === "moon" ? "#ffe0aa" : "#ff7a3c");
+  if (celType !== "none") {
+    const cg = x.createRadialGradient(cx, cy, cr * 0.4, cx, cy, cr * 3.2);
+    cg.addColorStop(0, glowCol + "e6");
+    cg.addColorStop(0.3, glowCol + "59");
+    cg.addColorStop(1, glowCol + "00");
+    x.fillStyle = cg;
+    x.fillRect(0, 0, w, h);
+    x.fillStyle = celCol;
+    x.beginPath(); x.arc(cx, cy, cr, 0, Math.PI * 2); x.fill();
+    if (celType === "moon") {
+      x.fillStyle = "rgba(120,100,90,0.25)";
+      x.beginPath(); x.arc(cx - cr * 0.3, cy - cr * 0.15, cr * 0.18, 0, Math.PI * 2); x.fill();
+      x.beginPath(); x.arc(cx + cr * 0.2, cy + cr * 0.25, cr * 0.12, 0, Math.PI * 2); x.fill();
+    }
+  }
+
+  // 雲
+  const clouds = spec.clouds && typeof spec.clouds === "object" ? spec.clouds : {};
+  const cloudN = Math.round(pickNum(clouds.count, 0, 10, 0));
+  const cloudCol = pickCol(clouds.color, "#282250");
+  for (let i = 0; i < cloudN; i++) {
+    x.globalAlpha = 0.35 + rnd() * 0.3;
+    x.fillStyle = cloudCol;
+    x.beginPath();
+    x.ellipse(rnd() * w, h * (0.12 + rnd() * 0.4), 130 + rnd() * 240, 12 + rnd() * 12, 0, 0, Math.PI * 2);
+    x.fill();
+  }
+  x.globalAlpha = 1;
+
+  // 地面
+  const ground = spec.ground && typeof spec.ground === "object" ? spec.ground : {};
+  const gcols = (Array.isArray(ground.colors) ? ground.colors : []).filter((s) => HEX6.test(String(s)));
+  const gtype = ["sea", "grid", "mountains", "city", "plain"].includes(ground.type)
+    ? ground.type : "plain";
+  if (gtype === "sea") {
+    x.fillStyle = gcols[0] || "#10122c";
+    x.fillRect(0, horizon, w, h - horizon);
+    for (let i = 0; i < 90; i++) {
+      x.fillStyle = `rgba(255,255,255,${0.03 + rnd() * 0.07})`;
+      x.fillRect(rnd() * w, horizon + rnd() * (h - horizon), 20 + rnd() * 120, 2);
+    }
+    if (celType !== "none") {
+      for (let i = 0; i < 44; i++) {
+        const ly = horizon + (i / 44) * (h - horizon);
+        const spread = 20 + i * 3.4;
+        const lw = 12 + rnd() * spread;
+        x.fillStyle = glowCol + "4d";
+        x.fillRect(cx - lw / 2 + (rnd() - 0.5) * spread * 0.7, ly, lw, 2.4);
+      }
+    }
+  } else if (gtype === "grid") {
+    x.fillStyle = "rgba(8,8,14,0.55)";
+    x.fillRect(0, horizon, w, h - horizon);
+    x.strokeStyle = (gcols[0] || "#c8ff00") + "8c";
+    x.lineWidth = 2;
+    for (let i = 0; i < 14; i++) {
+      const t = i / 13;
+      const yv = horizon + (h - horizon) * t * t;
+      x.beginPath(); x.moveTo(0, yv); x.lineTo(w, yv); x.stroke();
+    }
+    for (let i = -10; i <= 10; i++) {
+      x.beginPath();
+      x.moveTo(w / 2 + i * 60, horizon);
+      x.lineTo(w / 2 + i * 260, h);
+      x.stroke();
+    }
+  } else if (gtype === "mountains") {
+    const layers = (gcols.length ? gcols : ["#7a3f66", "#54305c", "#331f47"]).slice(0, 4);
+    layers.forEach((lc, li) => {
+      const base = horizon / h + (li + 1) * ((0.97 - horizon / h) / layers.length);
+      x.fillStyle = lc;
+      x.beginPath();
+      x.moveTo(0, h);
+      for (let px = 0; px <= w; px += 8) {
+        const t = px / w;
+        const yv = h * base -
+          Math.abs(Math.sin(t * 4.4 + li * 2.1) + Math.sin(t * 9.7 + li)) * (60 + li * 18) -
+          Math.sin(t * 23 + li * 5) * 8;
+        x.lineTo(px, yv);
+      }
+      x.lineTo(w, h);
+      x.closePath();
+      x.fill();
+    });
+  } else if (gtype === "city") {
+    x.fillStyle = "rgba(8,8,14,0.4)";
+    x.fillRect(0, horizon, w, h - horizon);
+    const sil = gcols[0] || "#0b0b14";
+    let bx = -20;
+    while (bx < w) {
+      const bw = 60 + rnd() * 110;
+      const bh = h * (0.12 + rnd() * 0.3);
+      x.fillStyle = sil;
+      x.fillRect(bx, horizon - bh, bw, bh + (h - horizon) * 0.4);
+      for (let wy = horizon - bh + 14; wy < horizon - 8; wy += 24) {
+        for (let wx = bx + 8; wx < bx + bw - 10; wx += 20) {
+          if (rnd() < 0.3) {
+            x.fillStyle = rnd() < 0.6 ? "rgba(255,209,102,0.7)" : "rgba(120,220,255,0.5)";
+            x.fillRect(wx, wy, 7, 10);
+          }
+        }
+      }
+      bx += bw + 8 + rnd() * 30;
+    }
+    x.fillStyle = "rgba(8,8,14,0.85)";
+    x.fillRect(0, horizon + (h - horizon) * 0.4, w, (h - horizon) * 0.6);
+  } else {
+    x.fillStyle = gcols[0] || "#141230";
+    x.fillRect(0, horizon, w, h - horizon);
+    for (let i = 0; i < 40; i++) {
+      x.fillStyle = `rgba(255,255,255,${0.02 + rnd() * 0.05})`;
+      x.fillRect(rnd() * w, horizon + rnd() * (h - horizon), 40 + rnd() * 200, 2);
+    }
+  }
+
+  // 鳥
+  const birds = Math.round(pickNum(spec.birds, 0, 12, 0));
+  x.strokeStyle = "rgba(20,14,30,0.85)";
+  x.lineWidth = 2.4;
+  for (let i = 0; i < birds; i++) {
+    const bx = w * (0.15 + rnd() * 0.7), by = h * (0.12 + rnd() * 0.3), s = 7 + rnd() * 9;
+    x.beginPath();
+    x.moveTo(bx - s, by);
+    x.quadraticCurveTo(bx - s * 0.4, by - s * 0.7, bx, by);
+    x.quadraticCurveTo(bx + s * 0.4, by - s * 0.7, bx + s, by);
+    x.stroke();
+  }
+
+  // ネオンサイン
+  for (const s of (Array.isArray(spec.signs) ? spec.signs : []).slice(0, 4)) {
+    if (!s || typeof s !== "object") continue;
+    const t = typeof s.text === "string" ? s.text.slice(0, 6) : "";
+    if (!t) continue;
+    const scol = pickCol(s.color, "#ff3ea5");
+    const sx = pickNum(s.x, 0.06, 0.94, 0.5) * w;
+    const sy = pickNum(s.y, 0.1, 0.75, 0.3) * h;
+    x.save();
+    x.font = "42px 'DotGothic16', monospace";
+    x.textAlign = "center";
+    x.shadowColor = scol;
+    x.shadowBlur = 26;
+    x.fillStyle = scol;
+    x.fillText(t, sx, sy);
+    x.globalAlpha = 0.55;
+    x.strokeStyle = scol;
+    x.lineWidth = 2;
+    const bw = Math.max(96, t.length * 46);
+    x.strokeRect(sx - bw / 2, sy - 42, bw, 58);
+    x.restore();
+  }
+
+  // 雨
+  const rain = Math.round(pickNum(spec.rain, 0, 240, 0));
+  x.strokeStyle = "rgba(200,215,255,0.18)";
+  x.lineWidth = 1;
+  for (let i = 0; i < rain; i++) {
+    const rx = rnd() * w, ry = rnd() * h, len = 14 + rnd() * 18;
+    x.beginPath(); x.moveTo(rx, ry); x.lineTo(rx - 3, ry + len); x.stroke();
+  }
+
+  setSourceImage(c, w, h);
+  document.getElementById("drop-hint").style.display = "";
+}
+
+const sceneBtn = document.getElementById("btn-scene");
+async function generateScene() {
+  const prompt = aiPrompt.value.trim();
+  if (!prompt) return;
+  sceneBtn.disabled = true;
+  sceneBtn.textContent = "描画中…";
+  try {
+    const res = await fetch("/api/scene", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ prompt }),
+    });
+    if (res.status === 429) {
+      setNote("リクエストが多すぎます。1分ほど待ってから再試行してください。", true);
+      return;
+    }
+    if (res.status === 503) {
+      setNote("本日のAI生成の無料枠を使い切りました。日本時間 朝9時にリセットされます。", true);
+      return;
+    }
+    if (!res.ok) throw new Error(String(res.status));
+    const { spec } = await res.json();
+    renderScene(spec);
+    setNote("シーンを描画しました。エフェクトをかけてみてください。");
+  } catch {
+    setNote("シーン生成に失敗しました。再試行してください。", true);
+  } finally {
+    sceneBtn.disabled = false;
+    sceneBtn.textContent = "シーン";
+  }
+}
+sceneBtn.addEventListener("click", generateScene);
 
 // ---------------------------------------------------------------- render
 
@@ -1661,3 +1902,10 @@ const presetMatch = location.hash.match(/preset=([A-Z0-9]+)/i);
 const initialPreset =
   (presetMatch && PRESETS.find((p) => p.name === presetMatch[1].toUpperCase())) || PRESETS[1];
 applyPreset(initialPreset);
+// シーン仕様をハッシュ指定でも描画可（テスト・共有用。例: /#scene=<urlencoded JSON>）
+const sceneHashMatch = location.hash.match(/scene=([^&]+)/);
+if (sceneHashMatch && sceneHashMatch[1].length < 2048) {
+  try {
+    renderScene(JSON.parse(decodeURIComponent(sceneHashMatch[1])));
+  } catch { /* 不正なハッシュは無視してサンプルのまま */ }
+}

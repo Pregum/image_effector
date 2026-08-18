@@ -51,7 +51,7 @@ async function handleGenerate(req, env) {
   // 日本語などの非ASCIIプロンプトは英語に翻訳してから画像生成に渡す
   if (/[^\x00-\x7F]/.test(p)) {
     try {
-      const tr = await env.AI.run("@cf/meta/llama-3.1-8b-instruct", {
+      const tr = await env.AI.run("@cf/meta/llama-3.1-8b-instruct-fp8", {
         messages: [
           {
             role: "system",
@@ -262,6 +262,70 @@ async function embedRoute(req, env, id) {
   }
 }
 
+// ベクター風シーン仕様の生成（テキスト→JSON→クライアントがCanvas描画）
+const SCENE_SYSTEM = [
+  "You convert a short Japanese or English scene description into a JSON spec for a flat vector-style landscape renderer.",
+  "Reply with ONLY minified JSON. No code fences, no explanations.",
+  'Schema: {"sky":[2-4 hex colors, top to bottom],"horizon":0.55-0.85,"celestial":{"type":"sun|moon|none","x":0-1,"y":0-1 (0=top, keep above horizon),"r":0.04-0.14,"color":"#hex","glow":"#hex"},"stars":0-150 (0 unless night),"clouds":{"count":0-8,"color":"#hex"},"ground":{"type":"sea|grid|mountains|city|plain","colors":[1-4 hex colors; mountains: 2-4 layers near to far; city: 1 silhouette color; sea/plain: 1 base color; grid: 1 line color]},"rain":0-200,"birds":0-10,"signs":[0-4 neon signs {"text":"up to 6 chars, Japanese ok","color":"#hex","x":0.1-0.9,"y":0.15-0.6}]}',
+  "Choose emotionally evocative palettes that match the described time, weather and mood (emo / vaporwave / Japanese dusk aesthetics welcome). Vary palettes: morning=pale blues, noon=clear, dusk=magenta/orange, night=deep indigo.",
+  'Example. User: 雨のネオン街 → {"sky":["#07070f","#141024","#1c1230"],"horizon":0.72,"celestial":{"type":"none","x":0.5,"y":0.3,"r":0.06,"color":"#ffeecf","glow":"#ff7a3c"},"stars":0,"clouds":{"count":2,"color":"#221a38"},"ground":{"type":"city","colors":["#0b0b14"]},"rain":160,"birds":0,"signs":[{"text":"ネオン","color":"#ff3ea5","x":0.2,"y":0.28},{"text":"BAR","color":"#35e0ff","x":0.75,"y":0.4}]}',
+].join("\n");
+
+// 応答の前後にゴミが付いても最後にパースできる閉じ括弧まで遡って抽出する
+function extractJson(text) {
+  const start = text.indexOf("{");
+  if (start < 0) return null;
+  let end = text.lastIndexOf("}");
+  while (end > start) {
+    try {
+      return JSON.parse(text.slice(start, end + 1));
+    } catch { /* ひとつ前の閉じ括弧で再試行 */ }
+    end = text.lastIndexOf("}", end - 1);
+  }
+  return null;
+}
+
+async function sceneRoute(req, env) {
+  if (!(await rateLimit(env, clientIp(req) + "#scene", 10))) {
+    return json({ error: "rate limited" }, 429);
+  }
+  let body;
+  try {
+    body = await req.json();
+  } catch {
+    return json({ error: "invalid json" }, 400);
+  }
+  const prompt = body?.prompt;
+  if (typeof prompt !== "string" || !prompt.trim() || prompt.length > 300) {
+    return json({ error: "invalid prompt" }, 400);
+  }
+  try {
+    const r = await env.AI.run("@cf/meta/llama-3.3-70b-instruct-fp8-fast", {
+      messages: [
+        { role: "system", content: SCENE_SYSTEM },
+        { role: "user", content: prompt.trim() },
+      ],
+      max_tokens: 700,
+    });
+    // モデル/ランタイムによりresponseが文字列でなくパース済みオブジェクトの場合がある
+    const raw = r?.response;
+    const spec =
+      raw && typeof raw === "object" ? raw : extractJson(String(raw ?? ""));
+    if (!spec || typeof spec !== "object") {
+      console.error("scene parse failed:", String(raw).slice(0, 200));
+      return json({ error: "parse failed" }, 502);
+    }
+    return json({ spec });
+  } catch (e) {
+    const msg = e?.message ?? String(e);
+    console.error("scene failed:", msg);
+    if (msg.includes("4006") || msg.includes("neurons")) {
+      return json({ error: "quota exceeded" }, 503);
+    }
+    return json({ error: "scene failed" }, 500);
+  }
+}
+
 export default {
   async fetch(req, env, ctx) {
     const url = new URL(req.url);
@@ -269,6 +333,9 @@ export default {
 
     if (pathname === "/api/generate" && req.method === "POST") {
       return handleGenerate(req, env);
+    }
+    if (pathname === "/api/scene" && req.method === "POST") {
+      return sceneRoute(req, env);
     }
 
     if (pathname === "/api/works" && req.method === "POST") return saveWork(req, env, ctx);

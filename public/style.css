@@ -201,6 +201,7 @@ body {
 /* ---- AI box ---- */
 .ai-box { background: linear-gradient(to bottom, #171a10, var(--panel)); }
 .ai-row { display: flex; gap: 6px; }
+.ai-row .btn { white-space: nowrap; }
 #ai-prompt {
   flex: 1;
   background: #0c0e09;

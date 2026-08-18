@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS works (
   thumb_type TEXT NOT NULL DEFAULT 'image/webp',
   parent_a TEXT,
   parent_b TEXT,
-  caption TEXT
+  caption TEXT,
+  embedding TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_works_created ON works (created_at DESC);

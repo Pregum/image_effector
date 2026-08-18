@@ -550,6 +550,7 @@ function setSourceImage(imgLike, w, h) {
 }
 
 async function loadBlob(blob) {
+  pendingParents = null; // 新しい画像の読み込みで系譜情報はリセット（掛け合わせ時は後から再設定）
   try {
     const bmp = await createImageBitmap(blob);
     setSourceImage(bmp, bmp.width, bmp.height);
@@ -748,7 +749,10 @@ function setGalleryNote(msg, isError) {
   galleryNote.classList.toggle("error", !!isError);
 }
 
-function openGallery() { galleryOverlay.hidden = false; refreshGallery(); }
+function openGallery() {
+  galleryOverlay.hidden = false;
+  refreshGallery().then(() => { if (graphMode) startGraph(); });
+}
 function closeGallery() { galleryOverlay.hidden = true; }
 document.getElementById("btn-gallery").addEventListener("click", openGallery);
 document.getElementById("gallery-close").addEventListener("click", closeGallery);
@@ -795,6 +799,7 @@ async function saveToGallery() {
       prompt: aiPrompt.value.trim() || null,
       width: W,
       height: H,
+      parents: pendingParents || undefined,
     }));
     const res = await fetch("/api/works", {
       method: "POST",
@@ -807,7 +812,8 @@ async function saveToGallery() {
     } else if (res.status === 429) {
       result = "保存が多すぎます";
     } else if (res.ok) {
-      result = "保存しました ✓";
+      result = pendingParents ? "保存・系譜記録 ✓" : "保存しました ✓";
+      pendingParents = null; // 二重記録を防ぐ
     }
   } catch { /* result は保存失敗のまま */ }
   btnStore.textContent = result;
@@ -815,6 +821,8 @@ async function saveToGallery() {
   setTimeout(() => { btnStore.textContent = orig; }, 1800);
 }
 btnStore.addEventListener("click", saveToGallery);
+
+let lastWorks = [];
 
 async function refreshGallery() {
   if (!galleryKey()) {
@@ -832,6 +840,7 @@ async function refreshGallery() {
     }
     if (!res.ok) throw new Error(String(res.status));
     const { works } = await res.json();
+    lastWorks = works;
     galleryGrid.innerHTML = "";
     if (!works.length) {
       setGalleryNote("まだ作品がありません。「ギャラリーへ保存」で追加できます。");
@@ -876,6 +885,424 @@ async function loadWork(w) {
     closeGallery();
   } catch {
     setGalleryNote("読み込みに失敗しました。", true);
+  }
+}
+
+// ---------------------------------------------------------------- ナレッジグラフ
+
+let pendingParents = null; // 掛け合わせ・変異で生まれた子の親ID（保存時に系譜として記録）
+
+const graphWrap = document.getElementById("graph-wrap");
+const graphCanvas = document.getElementById("graph-canvas");
+const gctx = graphCanvas.getContext("2d");
+const graphActions = document.getElementById("graph-actions");
+const viewToggle = document.getElementById("gallery-view-toggle");
+
+let graphMode = false;
+let gNodes = [];
+let gEdges = [];   // 類似エッジ {a, b, w}
+let gLineage = []; // 系譜エッジ {a, b}
+let gSel = [];     // 選択中ノードID（最大2）
+let g3d = false;
+let gYaw = 0, gPitch = 0, gPanX = 0, gPanY = 0, gZoom = 1;
+const thumbCache = new Map();
+
+document.getElementById("chk-3d").addEventListener("change", (e) => {
+  g3d = e.target.checked;
+  if (!g3d) { gYaw = 0; gPitch = 0; }
+});
+
+viewToggle.addEventListener("click", () => {
+  graphMode = !graphMode;
+  viewToggle.textContent = graphMode ? "▤ 一覧" : "◈ グラフ";
+  galleryGrid.hidden = graphMode;
+  graphWrap.hidden = !graphMode;
+  if (graphMode) startGraph();
+});
+
+function startGraph() {
+  buildGraph();
+  requestAnimationFrame(graphFrame);
+  repairEmbeddings();
+}
+
+function buildGraph() {
+  const works = lastWorks.filter((w) => w.recipe);
+  const prev = new Map(gNodes.map((n) => [n.id, n]));
+  gNodes = works.map((w) => {
+    let img = thumbCache.get(w.id);
+    if (!img) {
+      img = new Image();
+      img.src = `/api/works/${w.id}/thumb`;
+      thumbCache.set(w.id, img);
+    }
+    const old = prev.get(w.id);
+    if (old) return Object.assign(old, { work: w });
+    return {
+      id: w.id, work: w, img,
+      x: (Math.random() - 0.5) * 320,
+      y: (Math.random() - 0.5) * 320,
+      z: (Math.random() - 0.5) * 320,
+      vx: 0, vy: 0, vz: 0,
+      sx: 0, sy: 0, sr: 0, hidden: true,
+    };
+  });
+  gSel = gSel.filter((id) => gNodes.some((n) => n.id === id));
+  computeEdges();
+  sizeGraphCanvas();
+  updateActions();
+}
+
+function sizeGraphCanvas() {
+  const dpr = window.devicePixelRatio || 1;
+  const w = graphCanvas.clientWidth;
+  const h = graphCanvas.clientHeight;
+  if (w && h) {
+    graphCanvas.width = w * dpr;
+    graphCanvas.height = h * dpr;
+    gctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+}
+
+function cosine(a, b) {
+  let s = 0, na = 0, nb = 0;
+  const n = Math.min(a.length, b.length);
+  for (let i = 0; i < n; i++) { s += a[i] * b[i]; na += a[i] * a[i]; nb += b[i] * b[i]; }
+  const d = Math.sqrt(na * nb);
+  return d > 0 ? s / d : 0;
+}
+
+// レシピを正規化ベクトル化（ON/OFF重み + 各パラメータの0..1値）
+function recipeVec(recipe) {
+  const v = [];
+  for (const mod of MODULES) {
+    const on = recipe?.enabled?.[mod.id] ? 1 : 0;
+    v.push(on * 2);
+    for (const p of mod.params) {
+      const val = recipe?.state?.[p.key] ?? DEFAULTS[p.key];
+      v.push(on * ((val - p.min) / (p.max - p.min)));
+    }
+    if (mod.seg) v.push(on * (recipe?.state?.[mod.seg.key] ?? 0) * 0.5);
+  }
+  return v;
+}
+
+function computeEdges() {
+  const N = gNodes.length;
+  const rvecs = gNodes.map((n) => recipeVec(n.work.recipe));
+  const sim = Array.from({ length: N }, () => new Float32Array(N));
+  for (let i = 0; i < N; i++) {
+    for (let j = i + 1; j < N; j++) {
+      const a = gNodes[i].work, b = gNodes[j].work;
+      const rs = Math.max(0, cosine(rvecs[i], rvecs[j]));
+      let s;
+      if (Array.isArray(a.embedding) && Array.isArray(b.embedding)) {
+        // bge系のcosineは0.55〜0.95に集まるので広げて0..1へ
+        const es = Math.min(1, Math.max(0, (cosine(a.embedding, b.embedding) - 0.55) / 0.4));
+        s = 0.6 * es + 0.4 * rs;
+      } else {
+        s = rs * 0.8;
+      }
+      sim[i][j] = sim[j][i] = s;
+    }
+  }
+  const pairs = new Set();
+  gEdges = [];
+  for (let i = 0; i < N; i++) {
+    const order = [...Array(N).keys()]
+      .filter((j) => j !== i)
+      .sort((x, y) => sim[i][y] - sim[i][x])
+      .slice(0, 3);
+    for (const j of order) {
+      if (sim[i][j] < 0.3) continue;
+      const key = Math.min(i, j) + ":" + Math.max(i, j);
+      if (pairs.has(key)) continue;
+      pairs.add(key);
+      gEdges.push({ a: Math.min(i, j), b: Math.max(i, j), w: sim[i][j] });
+    }
+  }
+  const idx = new Map(gNodes.map((n, i) => [n.id, i]));
+  gLineage = [];
+  gNodes.forEach((n, i) => {
+    for (const p of [n.work.parent_a, n.work.parent_b]) {
+      if (p && idx.has(p)) gLineage.push({ a: idx.get(p), b: i });
+    }
+  });
+}
+
+function stepSim() {
+  const N = gNodes.length;
+  for (let i = 0; i < N; i++) {
+    const a = gNodes[i];
+    for (let j = i + 1; j < N; j++) {
+      const b = gNodes[j];
+      let dx = a.x - b.x, dy = a.y - b.y, dz = a.z - b.z;
+      const d2 = dx * dx + dy * dy + dz * dz + 0.01;
+      const f = Math.min(8, 18000 / d2);
+      const d = Math.sqrt(d2);
+      dx /= d; dy /= d; dz /= d;
+      a.vx += dx * f; a.vy += dy * f; a.vz += dz * f;
+      b.vx -= dx * f; b.vy -= dy * f; b.vz -= dz * f;
+    }
+  }
+  const springs = [];
+  for (const e of gEdges) springs.push({ a: e.a, b: e.b, rest: 320 - 240 * e.w, k: 0.005 + 0.02 * e.w });
+  for (const e of gLineage) springs.push({ a: e.a, b: e.b, rest: 130, k: 0.03 });
+  for (const s of springs) {
+    const a = gNodes[s.a], b = gNodes[s.b];
+    let dx = b.x - a.x, dy = b.y - a.y, dz = b.z - a.z;
+    const d = Math.sqrt(dx * dx + dy * dy + dz * dz) || 1;
+    const f = (d - s.rest) * s.k;
+    dx /= d; dy /= d; dz /= d;
+    a.vx += dx * f; a.vy += dy * f; a.vz += dz * f;
+    b.vx -= dx * f; b.vy -= dy * f; b.vz -= dz * f;
+  }
+  for (const n of gNodes) {
+    n.vx -= n.x * 0.002; n.vy -= n.y * 0.002; n.vz -= n.z * 0.002;
+    n.vx *= 0.85; n.vy *= 0.85; n.vz *= 0.85;
+    n.x += n.vx; n.y += n.vy; n.z += n.vz;
+    if (!g3d) { n.z *= 0.8; n.vz = 0; }
+  }
+}
+
+function project(n, cw, ch) {
+  const cy = Math.cos(gYaw), sy = Math.sin(gYaw);
+  const cp = Math.cos(gPitch), sp = Math.sin(gPitch);
+  const x = n.x * cy + n.z * sy;
+  let z = -n.x * sy + n.z * cy;
+  const y = n.y * cp - z * sp;
+  z = n.y * sp + z * cp;
+  const f = 700;
+  if (z < -f + 60) return null; // カメラ背後は描画しない
+  const s = (f / (f + z)) * gZoom;
+  return { sx: cw / 2 + gPanX + x * s, sy: ch / 2 + gPanY + y * s, s, z };
+}
+
+function drawGraph() {
+  const cw = graphCanvas.clientWidth, ch = graphCanvas.clientHeight;
+  gctx.clearRect(0, 0, cw, ch);
+  const proj = gNodes.map((n) => project(n, cw, ch));
+
+  for (const e of gEdges) {
+    const a = proj[e.a], b = proj[e.b];
+    if (!a || !b) continue;
+    gctx.strokeStyle = `rgba(200,255,0,${(0.08 + e.w * 0.35).toFixed(3)})`;
+    gctx.lineWidth = 1;
+    gctx.beginPath(); gctx.moveTo(a.sx, a.sy); gctx.lineTo(b.sx, b.sy); gctx.stroke();
+  }
+  for (const e of gLineage) {
+    const a = proj[e.a], b = proj[e.b];
+    if (!a || !b) continue;
+    gctx.strokeStyle = "rgba(255,62,165,0.75)";
+    gctx.lineWidth = 1.6;
+    gctx.setLineDash([6, 4]);
+    gctx.beginPath(); gctx.moveTo(a.sx, a.sy); gctx.lineTo(b.sx, b.sy); gctx.stroke();
+    gctx.setLineDash([]);
+  }
+
+  const order = [...gNodes.keys()].filter((i) => proj[i]).sort((i, j) => proj[j].z - proj[i].z);
+  gNodes.forEach((n, i) => { n.hidden = !proj[i]; });
+  for (const i of order) {
+    const n = gNodes[i], p = proj[i];
+    const w = 56 * p.s, h = w * 0.75;
+    n.sx = p.sx; n.sy = p.sy; n.sr = w / 2;
+    const x = p.sx - w / 2, y = p.sy - h / 2;
+    if (n.img.complete && n.img.naturalWidth) {
+      gctx.drawImage(n.img, x, y, w, h);
+    } else {
+      gctx.fillStyle = "#151a11";
+      gctx.fillRect(x, y, w, h);
+    }
+    const si = gSel.indexOf(n.id);
+    gctx.strokeStyle = si >= 0 ? "#c8ff00" : "rgba(255,255,255,0.18)";
+    gctx.lineWidth = si >= 0 ? 2 : 1;
+    gctx.strokeRect(x, y, w, h);
+    if (si >= 0) {
+      gctx.fillStyle = "#c8ff00";
+      gctx.font = "bold 11px monospace";
+      gctx.fillText(si === 0 ? "A" : "B", x + 4, y + 13);
+    }
+  }
+}
+
+function graphFrame() {
+  if (galleryOverlay.hidden || !graphMode) return;
+  stepSim();
+  drawGraph();
+  requestAnimationFrame(graphFrame);
+}
+
+// --- 操作（クリック選択 / ドラッグ回転・移動 / ホイールズーム）
+let pDown = null;
+let pDragging = false;
+graphCanvas.addEventListener("pointerdown", (e) => {
+  pDown = { x: e.clientX, y: e.clientY };
+  pDragging = false;
+  graphCanvas.setPointerCapture(e.pointerId);
+});
+graphCanvas.addEventListener("pointermove", (e) => {
+  if (!pDown) return;
+  const dx = e.clientX - pDown.x, dy = e.clientY - pDown.y;
+  if (!pDragging && Math.hypot(dx, dy) > 4) pDragging = true;
+  if (pDragging) {
+    if (g3d) {
+      gYaw += dx * 0.005;
+      gPitch = Math.max(-1.3, Math.min(1.3, gPitch + dy * 0.005));
+    } else {
+      gPanX += dx;
+      gPanY += dy;
+    }
+    pDown = { x: e.clientX, y: e.clientY };
+  }
+});
+graphCanvas.addEventListener("pointerup", (e) => {
+  if (pDown && !pDragging) selectAt(e.offsetX, e.offsetY);
+  pDown = null;
+  pDragging = false;
+});
+graphCanvas.addEventListener("wheel", (e) => {
+  e.preventDefault();
+  gZoom = Math.max(0.35, Math.min(2.5, gZoom * (e.deltaY > 0 ? 0.92 : 1.08)));
+}, { passive: false });
+
+function selectAt(mx, my) {
+  let best = null, bestD = Infinity;
+  for (const n of gNodes) {
+    if (n.hidden) continue;
+    const dx = mx - n.sx, dy = my - n.sy;
+    if (Math.abs(dx) <= n.sr && Math.abs(dy) <= n.sr * 0.75) {
+      const d = dx * dx + dy * dy;
+      if (d < bestD) { bestD = d; best = n; }
+    }
+  }
+  if (!best) return;
+  const i = gSel.indexOf(best.id);
+  if (i >= 0) gSel.splice(i, 1);
+  else {
+    gSel.push(best.id);
+    if (gSel.length > 2) gSel.shift();
+  }
+  updateActions();
+}
+
+const nodeById = (id) => gNodes.find((n) => n.id === id);
+
+function updateActions() {
+  graphActions.innerHTML = "";
+  const mk = (label, fn) => {
+    const b = document.createElement("button");
+    b.className = "btn";
+    b.textContent = label;
+    b.addEventListener("click", fn);
+    graphActions.appendChild(b);
+  };
+  if (gSel.length === 1) {
+    const n = nodeById(gSel[0]);
+    mk("開く", () => loadWork(n.work));
+    mk("⚡ 突然変異", () => spawnChild(mutateRecipe(n.work.recipe), n.work, [n.work.id]));
+    if (n.work.caption) setGalleryNote(`“${n.work.caption}”`);
+  } else if (gSel.length === 2) {
+    const a = nodeById(gSel[0]);
+    const b = nodeById(gSel[1]);
+    mk("◇ 掛け合わせ", () =>
+      spawnChild(crossRecipes(a.work.recipe, b.work.recipe), a.work, [a.work.id, b.work.id]));
+    setGalleryNote("掛け合わせ: A(先に選択)の元画像に、AとBを混ぜたレシピを適用します。");
+  }
+}
+
+// --- レシピの交叉・突然変異（パラメータはmin/maxへクランプ）
+const clampParam = (p, v) => Math.min(p.max, Math.max(p.min, v));
+
+function crossRecipes(ra, rb) {
+  const en = {};
+  const st = { ...DEFAULTS };
+  for (const mod of MODULES) {
+    const a = !!ra?.enabled?.[mod.id];
+    const b = !!rb?.enabled?.[mod.id];
+    en[mod.id] = a && b ? true : a || b ? Math.random() < 0.7 : false;
+    const t = 0.35 + Math.random() * 0.3;
+    for (const p of mod.params) {
+      const va = ra?.state?.[p.key] ?? DEFAULTS[p.key];
+      const vb = rb?.state?.[p.key] ?? DEFAULTS[p.key];
+      let v = va + (vb - va) * t + (Math.random() - 0.5) * 0.1 * (p.max - p.min);
+      if (p.step >= 1) v = Math.round(v);
+      st[p.key] = clampParam(p, v);
+    }
+    if (mod.seg) {
+      const src = Math.random() < 0.5 ? ra : rb;
+      st[mod.seg.key] = src?.state?.[mod.seg.key] ?? DEFAULTS[mod.seg.key];
+    }
+  }
+  return { enabled: en, state: st, seed: Math.random() * 100 };
+}
+
+function mutateRecipe(r) {
+  const en = {};
+  const st = { ...DEFAULTS, ...(r?.state ?? {}) };
+  for (const mod of MODULES) {
+    en[mod.id] = !!r?.enabled?.[mod.id];
+    if (Math.random() < 0.18) en[mod.id] = !en[mod.id];
+    for (const p of mod.params) {
+      let v = (st[p.key] ?? DEFAULTS[p.key]) +
+        (en[mod.id] ? (Math.random() - 0.5) * 0.35 * (p.max - p.min) : 0);
+      if (p.step >= 1) v = Math.round(v);
+      st[p.key] = clampParam(p, v);
+    }
+  }
+  return { enabled: en, state: st, seed: Math.random() * 100 };
+}
+
+async function spawnChild(recipe, baseWork, parents) {
+  try {
+    // レシピを先に適用（ピクセルソートはソース読み込み時に反映されるため）
+    Object.assign(state, DEFAULTS, recipe.state);
+    for (const k of Object.keys(enabled)) enabled[k] = !!recipe.enabled[k];
+    seed = recipe.seed ?? Math.random() * 100;
+    syncUI();
+    const res = await fetch(`/api/works/${baseWork.id}/source`);
+    if (!res.ok) throw new Error(String(res.status));
+    await loadBlob(await res.blob());
+    pendingParents = parents;
+    gSel = [];
+    updateActions();
+    closeGallery();
+  } catch {
+    setGalleryNote("子作品の生成に失敗しました。", true);
+  }
+}
+
+// --- 埋め込み未計算の作品をグラフ表示時に少しずつ解析する
+let repairing = false;
+async function repairEmbeddings() {
+  if (repairing) return;
+  const missing = gNodes.filter((n) => !Array.isArray(n.work.embedding)).slice(0, 5);
+  if (!missing.length) return;
+  repairing = true;
+  let done = 0;
+  for (const n of missing) {
+    setGalleryNote(`画像を解析中… ${done + 1}/${missing.length}`);
+    try {
+      const res = await fetch(`/api/works/${n.id}/embed`, {
+        method: "POST",
+        headers: { "x-gallery-key": galleryKey() },
+      });
+      if (res.status === 503) {
+        setGalleryNote("AI無料枠を使い切ったため、今回はレシピ類似のみで表示します。", true);
+        break;
+      }
+      if (!res.ok) continue;
+      const r = await res.json();
+      n.work.embedding = r.embedding;
+      n.work.caption = r.caption;
+      done++;
+    } catch {
+      break;
+    }
+  }
+  repairing = false;
+  if (done) {
+    computeEdges();
+    setGalleryNote(`${done}件を解析してグラフを更新しました。`);
   }
 }
 

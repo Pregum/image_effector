@@ -32,11 +32,20 @@
   <div class="gallery-panel">
     <div class="gallery-head">
       <h2 class="section-title">GALLERY <span class="jp">／ 作品ギャラリー</span></h2>
+      <button id="gallery-view-toggle" class="btn">◈ グラフ</button>
       <input id="gallery-key" type="password" placeholder="アクセスキー" autocomplete="off" />
       <button id="gallery-close" class="btn">閉じる</button>
     </div>
     <p class="gallery-note" id="gallery-note">保存した作品（元画像+レシピ）を読み込んで再編集できます。</p>
     <div class="gallery-grid" id="gallery-grid"></div>
+    <div id="graph-wrap" hidden>
+      <div class="graph-controls">
+        <label class="anim-toggle"><input type="checkbox" id="chk-3d" /> 3D</label>
+        <span class="graph-actions" id="graph-actions"></span>
+        <span class="graph-hint">クリックで選択（2つで掛け合わせ）／ ドラッグで回転・移動</span>
+      </div>
+      <canvas id="graph-canvas"></canvas>
+    </div>
   </div>
 </div>
 

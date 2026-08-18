@@ -9,6 +9,19 @@
   "ai": {
     "binding": "AI"
   },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "noiz-lab",
+      "database_id": "082e6067-8427-44ff-be09-22aa37daa650"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "IMAGES",
+      "bucket_name": "noiz-lab-works"
+    }
+  ],
   "durable_objects": {
     "bindings": [
       { "name": "LIMITER", "class_name": "RateLimiter" }

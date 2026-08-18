@@ -22,9 +22,23 @@
   <div class="topbar-actions">
     <button id="btn-open" class="btn">画像を開く</button>
     <button id="btn-random" class="btn btn-alt" title="ランダムに効果をかける">◇ おまかせ</button>
+    <button id="btn-gallery" class="btn">ギャラリー</button>
+    <button id="btn-store" class="btn">ギャラリーへ保存</button>
     <button id="btn-save" class="btn btn-primary">PNG保存</button>
   </div>
 </header>
+
+<div class="gallery-overlay" id="gallery-overlay" hidden>
+  <div class="gallery-panel">
+    <div class="gallery-head">
+      <h2 class="section-title">GALLERY <span class="jp">／ 作品ギャラリー</span></h2>
+      <input id="gallery-key" type="password" placeholder="アクセスキー" autocomplete="off" />
+      <button id="gallery-close" class="btn">閉じる</button>
+    </div>
+    <p class="gallery-note" id="gallery-note">保存した作品（元画像+レシピ）を読み込んで再編集できます。</p>
+    <div class="gallery-grid" id="gallery-grid"></div>
+  </div>
+</div>
 
 <main class="layout">
   <section class="stage" id="stage">

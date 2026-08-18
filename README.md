@@ -24,17 +24,22 @@ SNSで流行しているグリッチ加工・ピクセルソート・ディザ/�
 | プリセット | Y2K / VHS / DREAM / PRINT / PIXEL / SORTED + おまかせ(ランダム) |
 | AI生成 | Workers AI (FLUX.1 schnell)。日本語プロンプトは llama-3.1-8b で英訳してから生成 |
 | 入出力 | ドラッグ&ドロップ / ファイル選択 / クリップボード貼り付け読み込み、PNG保存 |
-| 保護 | AI生成APIはIPごと5回/分のレート制限 (Durable Objects)、無料枠超過時は503で案内 |
+| ギャラリー | 作品（元画像+エフェクトレシピ）をR2+D1に保存し、いつでも読み込んで再編集。アクセスキーで保護 |
+| 保護 | AI生成5回/分・ギャラリー保存10回/分のIPごとレート制限 (Durable Objects)、無料枠超過時は503で案内 |
 
 ## 構成
 
 ```
 public/          静的アセット (index.html / style.css / app.js)
-  app.js         WebGL2パイプライン・エフェクトラックUI・ピクセルソート(CPU)
-src/worker.js    /api/generate (Workers AI) + レート制限DO + アセット配信
-wrangler.jsonc   Workers設定 (AI / Durable Objects / assets バインディング)
+  app.js         WebGL2パイプライン・エフェクトラックUI・ピクセルソート(CPU)・ギャラリーUI
+src/worker.js    /api/generate (Workers AI) + /api/works (ギャラリー) + レート制限DO + アセット配信
+schema.sql       D1スキーマ (works テーブル)
+wrangler.jsonc   Workers設定 (AI / D1 / R2 / Durable Objects / assets バインディング)
 docs/demo.gif    デモ
 ```
+
+ギャラリーの認証キーは Workers の secret (`GALLERY_KEY`)。
+ローテーションは `npx wrangler secret put GALLERY_KEY`、ローカル開発時は `.dev.vars` に記載する。
 
 レンダリングは「元画像(＋CPUピクセルソート) → 分離ガウシアンブラー → 輝度抽出+ブラー(ハレーション) →
 最終合成シェーダー(グリッチ/色収差/ディザ/CRT/グレイン)」のマルチパス構成。
@@ -47,6 +52,14 @@ npx wrangler deploy   # デプロイ (pregum.dev アカウントにログイン�
 ```
 
 ## ロードマップ
+
+### ビジュアル・ナレッジグラフ構想（作品の系譜 + 類似空間）
+作った1枚をノードとして貯め、グラフ上で「近い作品」を眺めたり、
+2作品を掛け合わせて新しい作品を生む方向に育てる。
+
+- [x] Phase 1: 作品ギャラリー（元画像+レシピをR2/D1に保存、読み込み再編集）
+- [ ] Phase 2: 類似グラフ（Workers AIで埋め込み → 2D/3Dフォースグラフ可視化）
+- [ ] Phase 3: 掛け合わせ（レシピ補間・突然変異）と系譜エッジの記録・表示
 
 ### 近いうち
 - [ ] OGP画像・シェア導線（加工結果をXへシェアしやすく）

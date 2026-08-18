@@ -338,6 +338,68 @@ input[type="range"]::-moz-range-thumb {
   color: #5a6150;
 }
 
+/* ---- gallery ---- */
+.gallery-overlay {
+  position: fixed; inset: 0; z-index: 100;
+  background: rgba(5, 6, 4, 0.88);
+  backdrop-filter: blur(3px);
+  display: flex; align-items: center; justify-content: center;
+  padding: 4vh 4vw;
+}
+.gallery-overlay[hidden] { display: none; }
+.gallery-panel {
+  width: min(1100px, 100%);
+  max-height: 92vh;
+  overflow-y: auto;
+  background: var(--panel);
+  border: 1px solid var(--line-hi);
+  box-shadow: 0 0 60px rgba(200, 255, 0, 0.08), 0 30px 80px rgba(0, 0, 0, 0.7);
+  padding: 18px 20px 22px;
+  clip-path: polygon(0 0, calc(100% - 14px) 0, 100% 14px, 100% 100%, 0 100%);
+}
+.gallery-head { display: flex; align-items: center; gap: 10px; }
+.gallery-head .section-title { flex: 1; margin-bottom: 0; }
+#gallery-key {
+  width: 170px;
+  background: #0c0e09;
+  border: 1px solid var(--line-hi);
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  padding: 6px 10px;
+  outline: none;
+}
+#gallery-key:focus { border-color: var(--acid); }
+.gallery-note { margin: 8px 0 14px; font-size: 11px; color: var(--ink-dim); }
+.gallery-note.error { color: var(--magenta); }
+.gallery-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: 12px;
+}
+.work {
+  border: 1px solid var(--line);
+  background: #0d100a;
+  cursor: pointer;
+  position: relative;
+  transition: border-color 0.12s, box-shadow 0.12s;
+}
+.work:hover { border-color: var(--acid); box-shadow: 0 0 12px rgba(200, 255, 0, 0.2); }
+.work img { width: 100%; aspect-ratio: 4/3; object-fit: cover; display: block; background: #000; }
+.work-meta {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 5px 8px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--ink-dim);
+}
+.work-del {
+  background: none; border: none;
+  color: var(--ink-dim); font-size: 13px;
+  cursor: pointer; padding: 0 2px;
+}
+.work-del:hover { color: var(--magenta); }
+
 /* ---- responsive ---- */
 @media (max-width: 860px) {
   .layout { grid-template-columns: 1fr; }

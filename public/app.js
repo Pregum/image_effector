@@ -728,6 +728,157 @@ function frame() {
 }
 requestAnimationFrame(frame);
 
+// ---------------------------------------------------------------- ギャラリー
+
+const galleryOverlay = document.getElementById("gallery-overlay");
+const galleryGrid = document.getElementById("gallery-grid");
+const galleryNote = document.getElementById("gallery-note");
+const galleryKeyInput = document.getElementById("gallery-key");
+const btnStore = document.getElementById("btn-store");
+
+const galleryKey = () => (localStorage.getItem("nl_gallery_key") || "").trim();
+galleryKeyInput.value = galleryKey();
+galleryKeyInput.addEventListener("change", () => {
+  localStorage.setItem("nl_gallery_key", galleryKeyInput.value.trim());
+  refreshGallery();
+});
+
+function setGalleryNote(msg, isError) {
+  galleryNote.textContent = msg;
+  galleryNote.classList.toggle("error", !!isError);
+}
+
+function openGallery() { galleryOverlay.hidden = false; refreshGallery(); }
+function closeGallery() { galleryOverlay.hidden = true; }
+document.getElementById("btn-gallery").addEventListener("click", openGallery);
+document.getElementById("gallery-close").addEventListener("click", closeGallery);
+galleryOverlay.addEventListener("click", (e) => { if (e.target === galleryOverlay) closeGallery(); });
+
+const toBlobAsync = (c, type, quality) =>
+  new Promise((resolve) => c.toBlob(resolve, type, quality));
+
+function currentRecipe() {
+  return { enabled: { ...enabled }, state: { ...state }, seed };
+}
+
+async function saveToGallery() {
+  if (!originalData) return;
+  if (!galleryKey()) {
+    openGallery();
+    setGalleryNote("先にアクセスキーを入力してください。", true);
+    return;
+  }
+  const orig = "ギャラリーへ保存";
+  btnStore.disabled = true;
+  btnStore.textContent = "保存中…";
+  let result = "保存失敗";
+  try {
+    // 元画像（レシピと合わせて保存し、再編集可能にする）
+    const sc = document.createElement("canvas");
+    sc.width = W; sc.height = H;
+    sc.getContext("2d").putImageData(originalData, 0, 0);
+    const source = await toBlobAsync(sc, "image/webp", 0.92);
+    // レンダリング結果のサムネイル
+    render(animate ? performance.now() / 1000 : frozenTime);
+    const scale = Math.min(1, 360 / W);
+    const tc = document.createElement("canvas");
+    tc.width = Math.max(1, Math.round(W * scale));
+    tc.height = Math.max(1, Math.round(H * scale));
+    tc.getContext("2d").drawImage(canvas, 0, 0, tc.width, tc.height);
+    const thumb = await toBlobAsync(tc, "image/webp", 0.85);
+
+    const fd = new FormData();
+    fd.append("source", source, "source");
+    fd.append("thumb", thumb, "thumb");
+    fd.append("meta", JSON.stringify({
+      recipe: currentRecipe(),
+      prompt: aiPrompt.value.trim() || null,
+      width: W,
+      height: H,
+    }));
+    const res = await fetch("/api/works", {
+      method: "POST",
+      headers: { "x-gallery-key": galleryKey() },
+      body: fd,
+    });
+    if (res.status === 401) {
+      openGallery();
+      setGalleryNote("アクセスキーが違います。", true);
+    } else if (res.status === 429) {
+      result = "保存が多すぎます";
+    } else if (res.ok) {
+      result = "保存しました ✓";
+    }
+  } catch { /* result は保存失敗のまま */ }
+  btnStore.textContent = result;
+  btnStore.disabled = false;
+  setTimeout(() => { btnStore.textContent = orig; }, 1800);
+}
+btnStore.addEventListener("click", saveToGallery);
+
+async function refreshGallery() {
+  if (!galleryKey()) {
+    galleryGrid.innerHTML = "";
+    setGalleryNote("アクセスキーを入力すると一覧が表示されます。");
+    return;
+  }
+  setGalleryNote("読み込み中…");
+  try {
+    const res = await fetch("/api/works", { headers: { "x-gallery-key": galleryKey() } });
+    if (res.status === 401) {
+      galleryGrid.innerHTML = "";
+      setGalleryNote("アクセスキーが違います。", true);
+      return;
+    }
+    if (!res.ok) throw new Error(String(res.status));
+    const { works } = await res.json();
+    galleryGrid.innerHTML = "";
+    if (!works.length) {
+      setGalleryNote("まだ作品がありません。「ギャラリーへ保存」で追加できます。");
+      return;
+    }
+    setGalleryNote(`${works.length}件の作品。クリックで読み込み。`);
+    for (const w of works) {
+      const el = document.createElement("div");
+      el.className = "work";
+      const dt = new Date(w.created_at);
+      const label = `${dt.getMonth() + 1}/${dt.getDate()} ` +
+        `${String(dt.getHours()).padStart(2, "0")}:${String(dt.getMinutes()).padStart(2, "0")}`;
+      el.innerHTML =
+        `<img loading="lazy" src="/api/works/${w.id}/thumb" alt="" />` +
+        `<div class="work-meta"><span>${label}</span><button class="work-del" title="削除">✕</button></div>`;
+      el.querySelector("img").addEventListener("click", () => loadWork(w));
+      el.querySelector(".work-del").addEventListener("click", async (e) => {
+        e.stopPropagation();
+        await fetch(`/api/works/${w.id}`, {
+          method: "DELETE",
+          headers: { "x-gallery-key": galleryKey() },
+        });
+        refreshGallery();
+      });
+      galleryGrid.appendChild(el);
+    }
+  } catch {
+    setGalleryNote("一覧の取得に失敗しました。", true);
+  }
+}
+
+async function loadWork(w) {
+  try {
+    // レシピを先に適用（ピクセルソートはソース読み込み時に反映されるため）
+    Object.assign(state, DEFAULTS, w.recipe.state);
+    for (const k of Object.keys(enabled)) enabled[k] = !!w.recipe.enabled?.[k];
+    seed = w.recipe.seed ?? 1;
+    syncUI();
+    const res = await fetch(`/api/works/${w.id}/source`);
+    if (!res.ok) throw new Error(String(res.status));
+    await loadBlob(await res.blob());
+    closeGallery();
+  } catch {
+    setGalleryNote("読み込みに失敗しました。", true);
+  }
+}
+
 // ---------------------------------------------------------------- 初期サンプル画像
 
 function makeSample() {

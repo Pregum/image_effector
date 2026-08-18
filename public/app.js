@@ -738,6 +738,36 @@ function renderScene(specIn) {
     x.fillRect(rnd() * w, rnd() * horizon * 0.9, 2, 2);
   }
 
+  // オーロラ
+  const aurora = spec.aurora && typeof spec.aurora === "object" ? spec.aurora : null;
+  if (aurora) {
+    const acolsRaw = (Array.isArray(aurora.colors) ? aurora.colors : []).filter((s) => HEX6.test(String(s)));
+    const bands = (acolsRaw.length ? acolsRaw : ["#5dffb0", "#7a6bff"]).slice(0, 3);
+    x.save();
+    x.globalCompositeOperation = "lighter";
+    bands.forEach((ac, bi) => {
+      const baseY = h * (0.08 + bi * 0.09);
+      x.beginPath();
+      x.moveTo(0, baseY);
+      for (let px = 0; px <= w; px += 16) {
+        const t = px / w;
+        x.lineTo(px, baseY + Math.sin(t * 4 + bi * 1.7) * 36 + Math.sin(t * 9 + bi) * 14);
+      }
+      for (let px = w; px >= 0; px -= 16) {
+        const t = px / w;
+        x.lineTo(px, baseY + 140 + Math.sin(t * 4 + bi * 1.7 + 0.6) * 30);
+      }
+      x.closePath();
+      const agr = x.createLinearGradient(0, baseY, 0, baseY + 160);
+      agr.addColorStop(0, ac + "00");
+      agr.addColorStop(0.4, ac + "38");
+      agr.addColorStop(1, ac + "00");
+      x.fillStyle = agr;
+      x.fill();
+    });
+    x.restore();
+  }
+
   // 太陽・月
   const cel = spec.celestial && typeof spec.celestial === "object" ? spec.celestial : {};
   const celType = cel.type === "moon" || cel.type === "none" ? cel.type : "sun";
@@ -774,6 +804,39 @@ function renderScene(specIn) {
     x.fill();
   }
   x.globalAlpha = 1;
+
+  // 花火
+  for (const f of (Array.isArray(spec.fireworks) ? spec.fireworks : []).slice(0, 4)) {
+    if (!f || typeof f !== "object") continue;
+    const fx = pickNum(f.x, 0.05, 0.95, 0.5) * w;
+    const fy = pickNum(f.y, 0.05, 0.6, 0.25) * h;
+    const fr = pickNum(f.r, 0.04, 0.18, 0.09) * w;
+    const fc = pickCol(f.color, "#ffb75d");
+    x.save();
+    x.globalCompositeOperation = "lighter";
+    const fg = x.createRadialGradient(fx, fy, 2, fx, fy, fr);
+    fg.addColorStop(0, fc + "59");
+    fg.addColorStop(1, fc + "00");
+    x.fillStyle = fg;
+    x.fillRect(fx - fr, fy - fr, fr * 2, fr * 2);
+    x.strokeStyle = fc;
+    x.lineWidth = 1.6;
+    const rays = 26;
+    for (let i = 0; i < rays; i++) {
+      const a = (i / rays) * Math.PI * 2 + rnd() * 0.12;
+      const len = fr * (0.7 + rnd() * 0.35);
+      x.globalAlpha = 0.45 + rnd() * 0.45;
+      x.beginPath();
+      x.moveTo(fx + Math.cos(a) * fr * 0.12, fy + Math.sin(a) * fr * 0.12);
+      x.lineTo(fx + Math.cos(a) * len, fy + Math.sin(a) * len);
+      x.stroke();
+      x.fillStyle = fc;
+      x.beginPath();
+      x.arc(fx + Math.cos(a) * len, fy + Math.sin(a) * len, 2.2, 0, Math.PI * 2);
+      x.fill();
+    }
+    x.restore();
+  }
 
   // 地面
   const ground = spec.ground && typeof spec.ground === "object" ? spec.ground : {};
@@ -861,6 +924,31 @@ function renderScene(specIn) {
     }
   }
 
+  // 鳥居（シルエット）
+  const torii = spec.torii && typeof spec.torii === "object" ? spec.torii : null;
+  if (torii) {
+    const ts = pickNum(torii.size, 0.1, 0.6, 0.32) * h;
+    const tx = pickNum(torii.x, 0.1, 0.9, 0.5) * w;
+    const tcol = pickCol(torii.color, "#2e0f1c");
+    const baseY = horizon + (h - horizon) * 0.3;
+    const wT = ts * 1.25;
+    x.fillStyle = tcol;
+    // 柱
+    x.fillRect(tx - wT * 0.4, baseY - ts * 0.78, ts * 0.075, ts * 0.78);
+    x.fillRect(tx + wT * 0.4 - ts * 0.075, baseY - ts * 0.78, ts * 0.075, ts * 0.78);
+    // 笠木（上部の反り）
+    x.beginPath();
+    x.moveTo(tx - wT * 0.52, baseY - ts * 0.8);
+    x.quadraticCurveTo(tx, baseY - ts * 0.88, tx + wT * 0.52, baseY - ts * 0.8);
+    x.lineTo(tx + wT * 0.54, baseY - ts * 0.93);
+    x.quadraticCurveTo(tx, baseY - ts * 1.02, tx - wT * 0.54, baseY - ts * 0.93);
+    x.closePath();
+    x.fill();
+    // 貫と額束
+    x.fillRect(tx - wT * 0.45, baseY - ts * 0.62, wT * 0.9, ts * 0.055);
+    x.fillRect(tx - ts * 0.032, baseY - ts * 0.8, ts * 0.064, ts * 0.19);
+  }
+
   // 鳥
   const birds = Math.round(pickNum(spec.birds, 0, 12, 0));
   x.strokeStyle = "rgba(20,14,30,0.85)";
@@ -895,6 +983,29 @@ function renderScene(specIn) {
     const bw = Math.max(96, t.length * 46);
     x.strokeRect(sx - bw / 2, sy - 42, bw, 58);
     x.restore();
+  }
+
+  // 桜の花びら
+  const sakura = Math.round(pickNum(spec.sakura, 0, 150, 0));
+  for (let i = 0; i < sakura; i++) {
+    const px = rnd() * w, py = rnd() * h, sz = 3 + rnd() * 6;
+    x.save();
+    x.translate(px, py);
+    x.rotate(rnd() * Math.PI);
+    x.fillStyle = `rgba(255,${170 + Math.floor(rnd() * 40)},${195 + Math.floor(rnd() * 30)},${0.5 + rnd() * 0.4})`;
+    x.beginPath();
+    x.ellipse(0, 0, sz, sz * 0.6, 0, 0, Math.PI * 2);
+    x.fill();
+    x.restore();
+  }
+
+  // 雪
+  const snow = Math.round(pickNum(spec.snow, 0, 240, 0));
+  for (let i = 0; i < snow; i++) {
+    x.fillStyle = `rgba(255,255,255,${0.35 + rnd() * 0.5})`;
+    x.beginPath();
+    x.arc(rnd() * w, rnd() * h, 1 + rnd() * 2.6, 0, Math.PI * 2);
+    x.fill();
   }
 
   // 雨

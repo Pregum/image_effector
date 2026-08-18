@@ -73,6 +73,8 @@ uniform float u_split;  // ティール&オレンジ 0..1
 uniform float u_sat;    // 彩度 (1が等倍)
 uniform float u_con;    // コントラスト (1が等倍)
 uniform float u_leak;   // 光漏れ 0..1.5
+uniform sampler2D u_text; // 文字オーバーレイ
+uniform float u_textOn;
 
 float hash(float n) { return fract(sin(n * 127.1 + u_seed * 311.7) * 43758.5453); }
 float hash2(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7)) + u_seed * 17.0) * 43758.5453); }
@@ -177,6 +179,12 @@ void main() {
     col += (bloomL * 0.9 + streak) * u_leak * lc;
   }
 
+  // 文字入れ（グリッチ・ぼかしの影響を受けず、CRT湾曲・走査線・粒子には馴染む位置）
+  if (u_textOn > 0.5) {
+    vec4 tcol = texture(u_text, uv);
+    col = mix(col, tcol.rgb, tcol.a * inside);
+  }
+
   // 走査線＋アパーチャグリル
   if (u_scan > 0.0) {
     col *= 1.0 - u_scan * 0.35 * (0.5 + 0.5 * sin(uv.y * u_res.y * 2.094));
@@ -258,6 +266,10 @@ const srcTex = makeTex();
 const blackTex = makeTex();
 gl.bindTexture(gl.TEXTURE_2D, blackTex);
 gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([0, 0, 0, 255]));
+const textTex = makeTex();
+const clearTex = makeTex();
+gl.bindTexture(gl.TEXTURE_2D, clearTex);
+gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([0, 0, 0, 0]));
 
 let fboA = null, fboB = null, fboC = null, fboD = null;
 let W = 0, H = 0;
@@ -600,8 +612,10 @@ function setSourceImage(imgLike, w, h) {
   canvas.height = H;
   allocFbos(W, H);
   uploadSource();
+  updateTextTexture();
   document.getElementById("status-res").textContent = `${W} × ${H} px`;
   document.getElementById("drop-hint").style.display = "none";
+  requestAnimationFrame(updateCropGuide);
 }
 
 async function loadBlob(blob) {
@@ -636,10 +650,162 @@ window.addEventListener("paste", (e) => {
   if (f) loadBlob(f.getAsFile());
 });
 
+// ---------------------------------------------------------------- 文字入れ
+
+const TEXT_DEFAULTS = { str: "", size: 0.12, pos: 2, color: 0, font: 0 };
+const textState = { ...TEXT_DEFAULTS };
+const TEXT_FONTS = [
+  ["400", "'DotGothic16', monospace"],
+  ["700", "'Zen Kaku Gothic New', sans-serif"],
+  ["700", "'IBM Plex Mono', monospace"],
+];
+const TEXT_COLORS = ["#ffffff", "#0b0d0c", "#c8ff00", "#ff3ea5"];
+
+function updateTextTexture() {
+  if (!W || !H) return;
+  const c = document.createElement("canvas");
+  c.width = W;
+  c.height = H;
+  const x = c.getContext("2d");
+  if (textState.str.trim()) {
+    const lines = textState.str.split("|").map((s) => s.trim()).filter(Boolean).slice(0, 3);
+    const size = textState.size * W;
+    const [weight, family] = TEXT_FONTS[textState.font] || TEXT_FONTS[0];
+    x.font = `${weight} ${size}px ${family}`;
+    x.textAlign = "center";
+    x.textBaseline = "middle";
+    const fill = TEXT_COLORS[textState.color] || "#ffffff";
+    const outline = textState.color === 1 ? "rgba(255,255,255,0.9)" : "rgba(10,10,14,0.85)";
+    const cy = H * [0.18, 0.5, 0.82][textState.pos];
+    const lh = size * 1.2;
+    const y0 = cy - ((lines.length - 1) * lh) / 2;
+    lines.forEach((ln, i) => {
+      const y = y0 + i * lh;
+      x.lineJoin = "round";
+      x.lineWidth = size * 0.14;
+      x.strokeStyle = outline;
+      x.strokeText(ln, W / 2, y);
+      x.shadowColor = fill;
+      x.shadowBlur = size * 0.35;
+      x.fillStyle = fill;
+      x.fillText(ln, W / 2, y);
+      x.shadowBlur = 0;
+    });
+  }
+  gl.bindTexture(gl.TEXTURE_2D, textTex);
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, c);
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+  markDirty();
+}
+
+// Webフォント読み込み完了後に文字テクスチャを再生成（フォールバック焼き付き対策）
+if (document.fonts?.ready) {
+  document.fonts.ready.then(() => { if (textState.str.trim()) updateTextTexture(); });
+}
+
+const textInput = document.getElementById("text-input");
+const textSizeInput = document.getElementById("text-size");
+textInput.addEventListener("input", () => {
+  textState.str = textInput.value;
+  updateTextTexture();
+});
+textSizeInput.addEventListener("input", () => {
+  textState.size = +textSizeInput.value;
+  document.getElementById("text-size-val").textContent = textState.size.toFixed(3);
+  updateTextTexture();
+});
+for (const [segId, key] of [
+  ["text-font-seg", "font"],
+  ["text-color-seg", "color"],
+  ["text-pos-seg", "pos"],
+]) {
+  const seg = document.getElementById(segId);
+  seg.querySelectorAll("button").forEach((b, i) => {
+    b.addEventListener("click", () => {
+      textState[key] = i;
+      seg.querySelectorAll("button").forEach((v) => v.classList.remove("sel"));
+      b.classList.add("sel");
+      updateTextTexture();
+    });
+  });
+}
+
+function applyTextRecipe(t) {
+  Object.assign(textState, TEXT_DEFAULTS, t && typeof t === "object" ? t : {});
+  textState.pos = Math.min(2, Math.max(0, textState.pos | 0));
+  textState.color = Math.min(TEXT_COLORS.length - 1, Math.max(0, textState.color | 0));
+  textState.font = Math.min(TEXT_FONTS.length - 1, Math.max(0, textState.font | 0));
+  syncTextUI();
+  updateTextTexture();
+}
+
+function syncTextUI() {
+  textInput.value = textState.str;
+  textSizeInput.value = textState.size;
+  document.getElementById("text-size-val").textContent = (+textState.size).toFixed(3);
+  for (const [segId, key] of [
+    ["text-font-seg", "font"],
+    ["text-color-seg", "color"],
+    ["text-pos-seg", "pos"],
+  ]) {
+    document.getElementById(segId).querySelectorAll("button")
+      .forEach((b, i) => b.classList.toggle("sel", i === textState[key]));
+  }
+}
+
+// ---------------------------------------------------------------- 書き出し・シェア
+
+let exportRatio = 0; // 0=元比率
+const ratioSeg = document.getElementById("ratio-seg");
+ratioSeg.querySelectorAll("button").forEach((b) => {
+  b.addEventListener("click", () => {
+    exportRatio = +b.dataset.r;
+    ratioSeg.querySelectorAll("button").forEach((v) => v.classList.remove("sel"));
+    b.classList.add("sel");
+    updateCropGuide();
+  });
+});
+
+function updateCropGuide() {
+  const guide = document.getElementById("crop-guide");
+  if (!exportRatio || !originalData) {
+    guide.hidden = true;
+    return;
+  }
+  const cw = canvas.clientWidth, ch = canvas.clientHeight;
+  if (!cw || !ch) { guide.hidden = true; return; }
+  const imgR = cw / ch;
+  let gw, gh;
+  if (exportRatio > imgR) { gw = cw; gh = cw / exportRatio; }
+  else { gh = ch; gw = ch * exportRatio; }
+  guide.hidden = false;
+  guide.style.left = canvas.offsetLeft + (cw - gw) / 2 + "px";
+  guide.style.top = canvas.offsetTop + (ch - gh) / 2 + "px";
+  guide.style.width = gw + "px";
+  guide.style.height = gh + "px";
+}
+window.addEventListener("resize", updateCropGuide);
+
 document.getElementById("btn-save").addEventListener("click", () => {
   if (!originalData) return;
   render(animate ? performance.now() / 1000 : frozenTime);
-  canvas.toBlob((blob) => {
+  let sx = 0, sy = 0, sw = canvas.width, sh = canvas.height;
+  if (exportRatio) {
+    const imgR = sw / sh;
+    if (exportRatio > imgR) {
+      sh = Math.round(sw / exportRatio);
+      sy = (canvas.height - sh) >> 1;
+    } else {
+      sw = Math.round(sh * exportRatio);
+      sx = (canvas.width - sw) >> 1;
+    }
+  }
+  const out = document.createElement("canvas");
+  out.width = sw;
+  out.height = sh;
+  out.getContext("2d").drawImage(canvas, sx, sy, sw, sh, 0, 0, sw, sh);
+  out.toBlob((blob) => {
     if (!blob) return;
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
@@ -647,6 +813,16 @@ document.getElementById("btn-save").addEventListener("click", () => {
     a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 5000);
   }, "image/png");
+});
+
+document.getElementById("btn-share").addEventListener("click", () => {
+  const text = "NOIZ LAB で画像にエフェクトをかけた🎛️";
+  const url = "https://image-effector.pregum-dev.workers.dev/";
+  window.open(
+    `https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}&url=${encodeURIComponent(url)}&hashtags=NOIZLAB`,
+    "_blank",
+    "noopener"
+  );
 });
 
 document.getElementById("chk-anim").addEventListener("change", (e) => {
@@ -709,16 +885,22 @@ const pickCol = (c, fb) => (typeof c === "string" && HEX6.test(c) ? c : fb);
 const pickNum = (v, lo, hi, fb) =>
   typeof v === "number" && isFinite(v) ? Math.min(hi, Math.max(lo, v)) : fb;
 
-// LLMが設計したシーン仕様(JSON)をCanvasでベクター風に描画する。
-// 仕様は信用せず、全フィールドをクランプ・検証して不正値でも必ず描き切る。
+// LLMが設計したシーン仕様(JSON)をエディタに読み込む
 function renderScene(specIn) {
   pendingParents = null;
-  const spec = specIn && typeof specIn === "object" ? specIn : {};
   const w = 1200, h = 800;
   const c = document.createElement("canvas");
   c.width = w;
   c.height = h;
-  const x = c.getContext("2d");
+  drawSceneSpec(c.getContext("2d"), w, h, specIn);
+  setSourceImage(c, w, h);
+  document.getElementById("drop-hint").style.display = "";
+}
+
+// シーン仕様をCanvasでベクター風に描画する。
+// 仕様は信用せず、全フィールドをクランプ・検証して不正値でも必ず描き切る。
+function drawSceneSpec(x, w, h, specIn) {
+  const spec = specIn && typeof specIn === "object" ? specIn : {};
   const rnd = srand(1 + Math.floor(Math.random() * 1e6));
 
   // 空
@@ -1016,9 +1198,6 @@ function renderScene(specIn) {
     const rx = rnd() * w, ry = rnd() * h, len = 14 + rnd() * 18;
     x.beginPath(); x.moveTo(rx, ry); x.lineTo(rx - 3, ry + len); x.stroke();
   }
-
-  setSourceImage(c, w, h);
-  document.getElementById("drop-hint").style.display = "";
 }
 
 const sceneBtn = document.getElementById("btn-scene");
@@ -1128,6 +1307,11 @@ function render(time) {
   gl.uniform1f(u.u_sat, enabled.grade ? state.sat : 1);
   gl.uniform1f(u.u_con, enabled.grade ? state.con : 1);
   gl.uniform1f(u.u_leak, enabled.leak ? state.leak : 0);
+  const textOn = textState.str.trim() !== "";
+  gl.activeTexture(gl.TEXTURE2);
+  gl.bindTexture(gl.TEXTURE_2D, textOn ? textTex : clearTex);
+  gl.uniform1i(u.u_text, 2);
+  gl.uniform1f(u.u_textOn, textOn ? 1 : 0);
   gl.drawArrays(gl.TRIANGLES, 0, 3);
 }
 
@@ -1175,7 +1359,7 @@ const toBlobAsync = (c, type, quality) =>
   new Promise((resolve) => c.toBlob(resolve, type, quality));
 
 function currentRecipe() {
-  return { enabled: { ...enabled }, state: { ...state }, seed };
+  return { enabled: { ...enabled }, state: { ...state }, seed, text: { ...textState } };
 }
 
 async function saveToGallery() {
@@ -1292,6 +1476,7 @@ async function loadWork(w) {
     for (const k of Object.keys(enabled)) enabled[k] = !!w.recipe.enabled?.[k];
     seed = w.recipe.seed ?? 1;
     syncUI();
+    applyTextRecipe(w.recipe.text);
     const res = await fetch(`/api/works/${w.id}/source`);
     if (!res.ok) throw new Error(String(res.status));
     await loadBlob(await res.blob());
@@ -1646,7 +1831,7 @@ function crossRecipes(ra, rb) {
       st[mod.seg.key] = src?.state?.[mod.seg.key] ?? DEFAULTS[mod.seg.key];
     }
   }
-  return { enabled: en, state: st, seed: Math.random() * 100 };
+  return { enabled: en, state: st, seed: Math.random() * 100, text: ra?.text ?? null };
 }
 
 function mutateRecipe(r) {
@@ -1662,7 +1847,7 @@ function mutateRecipe(r) {
       st[p.key] = clampParam(p, v);
     }
   }
-  return { enabled: en, state: st, seed: Math.random() * 100 };
+  return { enabled: en, state: st, seed: Math.random() * 100, text: r?.text ?? null };
 }
 
 async function spawnChild(recipe, baseWork, parents) {
@@ -1672,6 +1857,7 @@ async function spawnChild(recipe, baseWork, parents) {
     for (const k of Object.keys(enabled)) enabled[k] = !!recipe.enabled[k];
     seed = recipe.seed ?? Math.random() * 100;
     syncUI();
+    applyTextRecipe(recipe.text);
     const res = await fetch(`/api/works/${baseWork.id}/source`);
     if (!res.ok) throw new Error(String(res.status));
     await loadBlob(await res.blob());
@@ -1991,7 +2177,52 @@ function drawDuskMountains(x, w, h) {
   x.fillRect(0, 0, w, h);
 }
 
-const SAMPLES = [drawSunsetGrid, drawNeonAlley, drawMoonSea, drawDuskMountains];
+// シーン生成で検証済みの仕様を組み込みサンプルとしても提供する
+const SCENE_SAMPLE_SPECS = [
+  { // 桜×鳥居
+    sky: ["#4a2c5e", "#c66a8a", "#ffb98a"], horizon: 0.7,
+    celestial: { type: "sun", x: 0.35, y: 0.45, r: 0.07, color: "#ffdca0", glow: "#ff8a5c" },
+    stars: 0, clouds: { count: 3, color: "#7a4a6e" },
+    ground: { type: "plain", colors: ["#241530"] },
+    sakura: 90, birds: 3,
+    torii: { x: 0.5, size: 0.42, color: "#2e0f1c" },
+  },
+  { // 夏祭りの花火
+    sky: ["#0a0c1c", "#1a1f3c", "#2c2350"], horizon: 0.68,
+    celestial: { type: "none" }, stars: 120,
+    clouds: { count: 1, color: "#1e2240" },
+    ground: { type: "sea", colors: ["#0a0c14"] },
+    fireworks: [
+      { x: 0.3, y: 0.2, r: 0.1, color: "#ff69b4" },
+      { x: 0.7, y: 0.3, r: 0.12, color: "#33ccff" },
+      { x: 0.5, y: 0.14, r: 0.08, color: "#ffd75d" },
+    ],
+  },
+  { // 雨のネオン街
+    sky: ["#07070f", "#141024", "#1c1230"], horizon: 0.72,
+    celestial: { type: "none" }, stars: 0,
+    clouds: { count: 2, color: "#221a38" },
+    ground: { type: "city", colors: ["#0b0b14"] },
+    rain: 160,
+    signs: [
+      { text: "深夜", color: "#ff3ea5", x: 0.2, y: 0.28 },
+      { text: "ラーメン", color: "#35e0ff", x: 0.75, y: 0.4 },
+    ],
+  },
+  { // オーロラ雪原
+    sky: ["#0b1026", "#16204a", "#243a66"], horizon: 0.72,
+    celestial: { type: "moon", x: 0.78, y: 0.16, r: 0.05, color: "#ffffff", glow: "#9ecbff" },
+    stars: 130, clouds: { count: 0, color: "#ffffff" },
+    ground: { type: "mountains", colors: ["#e8ecf4", "#b9c2d4", "#7c88a6", "#4a5474"] },
+    snow: 170,
+    aurora: { colors: ["#5dffb0", "#7a6bff", "#34a8ff"] },
+  },
+];
+
+const SAMPLES = [
+  drawSunsetGrid, drawNeonAlley, drawMoonSea, drawDuskMountains,
+  ...SCENE_SAMPLE_SPECS.map((spec) => (x, w, h) => drawSceneSpec(x, w, h, spec)),
+];
 let sampleIndex = 0;
 
 function makeSample(i = 0) {
@@ -2019,4 +2250,13 @@ if (sceneHashMatch && sceneHashMatch[1].length < 2048) {
   try {
     renderScene(JSON.parse(decodeURIComponent(sceneHashMatch[1])));
   } catch { /* 不正なハッシュは無視してサンプルのまま */ }
+}
+// 文字入れもハッシュ指定可（例: /#text=夏の終わり|1999）
+const textHashMatch = location.hash.match(/text=([^&]+)/);
+if (textHashMatch && textHashMatch[1].length < 200) {
+  try {
+    textState.str = decodeURIComponent(textHashMatch[1]).slice(0, 60);
+    syncTextUI();
+    updateTextTexture();
+  } catch { /* 無視 */ }
 }

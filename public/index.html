@@ -7,6 +7,10 @@
 <meta name="description" content="ブラー・グリッチ・ピクセルソート・ディザ・CRT。ブラウザで完結する画像エフェクト実験室。AI画像生成にも対応。" />
 <meta property="og:title" content="NOIZ LAB — 画像エフェクト実験室" />
 <meta property="og:description" content="ブラー・グリッチ・ピクセルソート・ディザ・CRT。ブラウザで完結する画像エフェクト実験室。" />
+<meta property="og:type" content="website" />
+<meta property="og:url" content="https://image-effector.pregum-dev.workers.dev/" />
+<meta property="og:image" content="https://image-effector.pregum-dev.workers.dev/og.png" />
+<meta name="twitter:card" content="summary_large_image" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=DotGothic16&family=IBM+Plex+Mono:wght@400;600&family=Zen+Kaku+Gothic+New:wght@400;500&display=swap" rel="stylesheet" />
@@ -54,6 +58,7 @@
   <section class="stage" id="stage">
     <div class="stage-inner">
       <canvas id="view"></canvas>
+      <div id="crop-guide" hidden></div>
       <div class="drop-hint" id="drop-hint">
         <p class="drop-hint-en">DROP IMAGE HERE</p>
         <p>画像をドラッグ＆ドロップ / 貼り付け（⌘V）でも読み込めます</p>
@@ -62,6 +67,11 @@
     <div class="stage-status">
       <span id="status-res">—</span>
       <label class="anim-toggle"><input type="checkbox" id="chk-anim" checked /> アニメーション</label>
+      <span class="ratio-label">書き出し:</span>
+      <span class="ratio-seg" id="ratio-seg">
+        <button data-r="0" class="sel">元</button><button data-r="1.77778">16:9</button><button data-r="1">1:1</button><button data-r="0.5625">9:16</button>
+      </span>
+      <button id="btn-share" class="share-btn" title="Xでシェア">𝕏 シェア</button>
     </div>
   </section>
 
@@ -79,6 +89,24 @@
     <div class="panel-section">
       <h2 class="section-title">PRESETS <span class="jp">／ プリセット</span></h2>
       <div class="preset-row" id="presets"></div>
+    </div>
+
+    <div class="panel-section">
+      <h2 class="section-title">TEXT <span class="jp">／ サムネ文字入れ</span></h2>
+      <input id="text-input" type="text" maxlength="60" placeholder="タイトル文字（| で改行、空で非表示）" />
+      <div class="ctl">
+        <div class="ctl-label"><span>サイズ</span><span class="val" id="text-size-val">0.12</span></div>
+        <input type="range" id="text-size" min="0.05" max="0.28" step="0.005" value="0.12" />
+      </div>
+      <div class="seg" id="text-font-seg">
+        <button class="sel">ドット</button><button>ゴシック</button><button>等幅</button>
+      </div>
+      <div class="seg" id="text-color-seg">
+        <button class="sel">白</button><button>黒</button><button>蛍光</button><button>ピンク</button>
+      </div>
+      <div class="seg" id="text-pos-seg">
+        <button>上</button><button>中</button><button class="sel">下</button>
+      </div>
     </div>
 
     <div class="panel-section">

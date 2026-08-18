@@ -179,6 +179,36 @@ body {
 .anim-toggle { display: flex; align-items: center; gap: 6px; cursor: pointer; user-select: none; }
 .anim-toggle input { accent-color: var(--acid); }
 
+.ratio-label { margin-left: auto; }
+.ratio-seg { display: inline-flex; gap: 3px; }
+.ratio-seg button {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 3px 8px;
+  background: #10130b;
+  color: var(--ink-dim);
+  border: 1px solid var(--line);
+  cursor: pointer;
+}
+.ratio-seg button.sel { color: var(--acid); border-color: var(--acid); background: #1c2210; }
+.share-btn {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  padding: 3px 10px;
+  background: #10130b;
+  color: var(--ink);
+  border: 1px solid var(--line-hi);
+  cursor: pointer;
+}
+.share-btn:hover { color: var(--acid); border-color: var(--acid); }
+
+#crop-guide {
+  position: absolute;
+  border: 1.5px dashed var(--magenta);
+  pointer-events: none;
+  box-shadow: 0 0 0 9999px rgba(5, 6, 4, 0.45);
+}
+
 /* ---- panel ---- */
 .panel {
   background: var(--panel);
@@ -230,6 +260,21 @@ body {
   transition: all 0.12s;
 }
 .preset-chip:hover { color: var(--acid); border-color: var(--acid); box-shadow: 0 0 8px rgba(200, 255, 0, 0.2); }
+
+/* ---- text tool ---- */
+#text-input {
+  width: 100%;
+  background: #0c0e09;
+  border: 1px solid var(--line-hi);
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: 12px;
+  padding: 7px 10px;
+  outline: none;
+  margin-bottom: 4px;
+}
+#text-input:focus { border-color: var(--acid); box-shadow: 0 0 8px rgba(200, 255, 0, 0.2); }
+.panel-section .seg { margin-top: 6px; }
 
 /* ---- rack modules ---- */
 .module {

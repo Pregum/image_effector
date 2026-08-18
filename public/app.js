@@ -1369,12 +1369,12 @@ async function repairEmbeddings() {
 
 // ---------------------------------------------------------------- 初期サンプル画像
 
-function makeSample() {
-  const w = 1200, h = 800;
-  const c = document.createElement("canvas");
-  c.width = w; c.height = h;
-  const x = c.getContext("2d");
+// 乱数を固定シードで生成（サンプルの見た目を安定させる）
+function srand(s) {
+  return () => (s = (s * 16807 + 19487171) % 2147483647) / 2147483647;
+}
 
+function drawSunsetGrid(x, w, h) {
   const g = x.createLinearGradient(0, 0, w, h);
   g.addColorStop(0, "#1b2735");
   g.addColorStop(0.5, "#3a1c4f");
@@ -1429,12 +1429,234 @@ function makeSample() {
   x.font = "28px 'DotGothic16', monospace";
   x.fillStyle = "#c8ff00";
   x.fillText("画像をドロップして加工開始", w / 2, h * 0.93);
+}
 
+function drawNeonAlley(x, w, h) {
+  const rnd = srand(7);
+  const g = x.createLinearGradient(0, 0, 0, h);
+  g.addColorStop(0, "#07070f");
+  g.addColorStop(0.6, "#141024");
+  g.addColorStop(1, "#1c1230");
+  x.fillStyle = g;
+  x.fillRect(0, 0, w, h);
+  const horizon = h * 0.72;
+
+  // 路地の突き当たりの明かり（奥行き）
+  const dg = x.createRadialGradient(w * 0.5, horizon * 0.96, 10, w * 0.5, horizon * 0.96, w * 0.34);
+  dg.addColorStop(0, "rgba(255,120,170,0.5)");
+  dg.addColorStop(0.4, "rgba(150,80,180,0.22)");
+  dg.addColorStop(1, "transparent");
+  x.fillStyle = dg;
+  x.fillRect(0, 0, w, h);
+  // 遠景ビル
+  for (let i = 0; i < 8; i++) {
+    const bw = 40 + rnd() * 60;
+    const bh = h * (0.1 + rnd() * 0.16);
+    x.fillStyle = "rgba(22,18,38,0.9)";
+    x.fillRect(w * 0.3 + rnd() * w * 0.4, horizon - bh, bw, bh);
+  }
+
+  // 両側のビルと窓明かり
+  for (let side = 0; side < 2; side++) {
+    let bx = side ? w : 0;
+    for (let i = 0; i < 3; i++) {
+      const bw = 80 + rnd() * 100;
+      const bh = h * (0.5 + rnd() * 0.45);
+      const px = side ? bx - bw : bx;
+      x.fillStyle = i % 2 ? "#0b0b14" : "#0e0d18";
+      x.fillRect(px, horizon - bh, bw, bh);
+      for (let wy = horizon - bh + 18; wy < horizon - 14; wy += 30) {
+        for (let wx = px + 12; wx < px + bw - 12; wx += 26) {
+          if (rnd() < 0.3) {
+            x.fillStyle = rnd() < 0.6 ? "rgba(255,209,102,0.7)" : "rgba(120,220,255,0.55)";
+            x.fillRect(wx, wy, 9, 13);
+          }
+        }
+      }
+      bx = side ? px : px + bw;
+    }
+  }
+
+  // ネオンサインと路面反射
+  const signs = [
+    { t: "ノイズ", c: "#ff3ea5", vx: w * 0.16, vy: h * 0.26 },
+    { t: "実験室", c: "#35e0ff", vx: w * 0.79, vy: h * 0.2 },
+    { t: "エモ", c: "#c8ff00", vx: w * 0.7, vy: h * 0.5 },
+    { t: "BAR", c: "#ff8c42", vx: w * 0.24, vy: h * 0.54 },
+  ];
+  for (const s of signs) {
+    x.save();
+    x.font = "42px 'DotGothic16', monospace";
+    x.textAlign = "center";
+    x.shadowColor = s.c;
+    x.shadowBlur = 26;
+    x.fillStyle = s.c;
+    x.fillText(s.t, s.vx, s.vy);
+    x.globalAlpha = 0.55;
+    x.strokeStyle = s.c;
+    x.lineWidth = 2;
+    x.strokeRect(s.vx - 64, s.vy - 42, 128, 58);
+    x.restore();
+  }
+  for (const s of signs) {
+    const rg = x.createLinearGradient(0, horizon, 0, h);
+    rg.addColorStop(0, s.c + "55");
+    rg.addColorStop(1, "transparent");
+    x.fillStyle = rg;
+    x.fillRect(s.vx - 30, horizon, 60, h - horizon);
+  }
+  x.fillStyle = "rgba(10,8,18,0.5)";
+  x.fillRect(0, horizon, w, h - horizon);
+
+  // 雨
+  x.strokeStyle = "rgba(200,215,255,0.18)";
+  x.lineWidth = 1;
+  for (let i = 0; i < 170; i++) {
+    const rx = rnd() * w, ry = rnd() * h, len = 14 + rnd() * 18;
+    x.beginPath();
+    x.moveTo(rx, ry);
+    x.lineTo(rx - 3, ry + len);
+    x.stroke();
+  }
+}
+
+function drawMoonSea(x, w, h) {
+  const rnd = srand(21);
+  const g = x.createLinearGradient(0, 0, 0, h);
+  g.addColorStop(0, "#0a0d24");
+  g.addColorStop(0.55, "#2a2150");
+  g.addColorStop(0.72, "#684a78");
+  g.addColorStop(1, "#141230");
+  x.fillStyle = g;
+  x.fillRect(0, 0, w, h);
+  const horizon = h * 0.66;
+
+  for (let i = 0; i < 90; i++) {
+    x.fillStyle = `rgba(255,255,255,${0.2 + rnd() * 0.6})`;
+    x.fillRect(rnd() * w, rnd() * horizon * 0.85, 2, 2);
+  }
+
+  // 月とグロー
+  const mx = w * 0.62, my = h * 0.3, mr = 90;
+  const mg = x.createRadialGradient(mx, my, mr * 0.4, mx, my, mr * 3);
+  mg.addColorStop(0, "rgba(255,240,214,0.9)");
+  mg.addColorStop(0.2, "rgba(255,225,180,0.35)");
+  mg.addColorStop(1, "transparent");
+  x.fillStyle = mg;
+  x.fillRect(0, 0, w, h);
+  x.fillStyle = "#ffeecf";
+  x.beginPath(); x.arc(mx, my, mr, 0, Math.PI * 2); x.fill();
+  x.fillStyle = "rgba(214,190,160,0.4)";
+  x.beginPath(); x.arc(mx - 26, my - 12, 16, 0, Math.PI * 2); x.fill();
+  x.beginPath(); x.arc(mx + 18, my + 24, 11, 0, Math.PI * 2); x.fill();
+
+  // 雲
+  for (let i = 0; i < 5; i++) {
+    const cy = h * (0.18 + rnd() * 0.35);
+    x.fillStyle = "rgba(40,34,80,0.55)";
+    x.beginPath();
+    x.ellipse(rnd() * w, cy, 150 + rnd() * 260, 14 + rnd() * 10, 0, 0, Math.PI * 2);
+    x.fill();
+  }
+
+  // 海と月の道
+  x.fillStyle = "#10122c";
+  x.fillRect(0, horizon, w, h - horizon);
+  for (let i = 0; i < 90; i++) {
+    x.fillStyle = `rgba(120,110,190,${0.05 + rnd() * 0.12})`;
+    x.fillRect(rnd() * w, horizon + rnd() * (h - horizon), 20 + rnd() * 120, 2);
+  }
+  for (let i = 0; i < 46; i++) {
+    const ly = horizon + (i / 46) * (h - horizon);
+    const spread = 20 + i * 3.4;
+    const lw = 12 + rnd() * spread;
+    x.fillStyle = `rgba(255,224,170,${0.35 - i * 0.005})`;
+    x.fillRect(mx - lw / 2 + (rnd() - 0.5) * spread * 0.7, ly, lw, 2.4);
+  }
+}
+
+function drawDuskMountains(x, w, h) {
+  const rnd = srand(5);
+  const g = x.createLinearGradient(0, 0, 0, h);
+  g.addColorStop(0, "#2b1a4e");
+  g.addColorStop(0.45, "#a4486a");
+  g.addColorStop(0.7, "#ff9d5c");
+  g.addColorStop(1, "#ffd9a0");
+  x.fillStyle = g;
+  x.fillRect(0, 0, w, h);
+
+  // 沈む太陽
+  const sx = w * 0.46, sy = h * 0.6;
+  const sg = x.createRadialGradient(sx, sy, 10, sx, sy, 320);
+  sg.addColorStop(0, "rgba(255,236,200,0.95)");
+  sg.addColorStop(0.25, "rgba(255,170,90,0.5)");
+  sg.addColorStop(1, "transparent");
+  x.fillStyle = sg;
+  x.fillRect(0, 0, w, h);
+  x.fillStyle = "#fff1cd";
+  x.beginPath(); x.arc(sx, sy, 64, 0, Math.PI * 2); x.fill();
+
+  // 山のシルエット4層
+  const layers = [
+    { base: 0.55, amp: 90, col: "#7a3f66" },
+    { base: 0.66, amp: 110, col: "#54305c" },
+    { base: 0.78, amp: 120, col: "#331f47" },
+    { base: 0.88, amp: 90, col: "#1c1230" },
+  ];
+  layers.forEach((L, li) => {
+    x.fillStyle = L.col;
+    x.beginPath();
+    x.moveTo(0, h);
+    for (let px = 0; px <= w; px += 8) {
+      const t = px / w;
+      const yv = h * L.base -
+        Math.abs(Math.sin(t * 4.4 + li * 2.1) + Math.sin(t * 9.7 + li)) * L.amp * 0.5 -
+        Math.sin(t * 23 + li * 5) * 8;
+      x.lineTo(px, yv);
+    }
+    x.lineTo(w, h);
+    x.closePath();
+    x.fill();
+  });
+
+  // 鳥
+  x.strokeStyle = "rgba(30,16,40,0.85)";
+  x.lineWidth = 2.4;
+  for (let i = 0; i < 7; i++) {
+    const bx = w * (0.2 + rnd() * 0.55), by = h * (0.16 + rnd() * 0.24), s = 7 + rnd() * 9;
+    x.beginPath();
+    x.moveTo(bx - s, by);
+    x.quadraticCurveTo(bx - s * 0.4, by - s * 0.7, bx, by);
+    x.quadraticCurveTo(bx + s * 0.4, by - s * 0.7, bx + s, by);
+    x.stroke();
+  }
+
+  // 夕靄
+  const mist = x.createLinearGradient(0, h * 0.5, 0, h);
+  mist.addColorStop(0, "transparent");
+  mist.addColorStop(1, "rgba(255,190,140,0.22)");
+  x.fillStyle = mist;
+  x.fillRect(0, 0, w, h);
+}
+
+const SAMPLES = [drawSunsetGrid, drawNeonAlley, drawMoonSea, drawDuskMountains];
+let sampleIndex = 0;
+
+function makeSample(i = 0) {
+  sampleIndex = ((i % SAMPLES.length) + SAMPLES.length) % SAMPLES.length;
+  const w = 1200, h = 800;
+  const c = document.createElement("canvas");
+  c.width = w;
+  c.height = h;
+  SAMPLES[sampleIndex](c.getContext("2d"), w, h);
   setSourceImage(c, w, h);
   document.getElementById("drop-hint").style.display = "";
 }
-makeSample();
-// URLハッシュでプリセット指定可（例: /#preset=CINEMA）。指定なしはY2Kでデモ
+document.getElementById("btn-sample").addEventListener("click", () => makeSample(sampleIndex + 1));
+
+// URLハッシュで初期状態を指定可（例: /#preset=CINEMA&sample=2）。指定なしはY2Kでデモ
+const sampleMatch = location.hash.match(/sample=(\d+)/);
+makeSample(sampleMatch ? +sampleMatch[1] : 0);
 const presetMatch = location.hash.match(/preset=([A-Z0-9]+)/i);
 const initialPreset =
   (presetMatch && PRESETS.find((p) => p.name === presetMatch[1].toUpperCase())) || PRESETS[1];

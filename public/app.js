@@ -652,7 +652,7 @@ window.addEventListener("paste", (e) => {
 
 // ---------------------------------------------------------------- 文字入れ
 
-const TEXT_DEFAULTS = { str: "", size: 0.12, pos: 2, color: 0, font: 0 };
+const TEXT_DEFAULTS = { str: "", size: 0.12, x: 0.5, y: 0.82, color: 0, font: 0 };
 const textState = { ...TEXT_DEFAULTS };
 const TEXT_FONTS = [
   ["400", "'DotGothic16', monospace"],
@@ -676,7 +676,8 @@ function updateTextTexture() {
     x.textBaseline = "middle";
     const fill = TEXT_COLORS[textState.color] || "#ffffff";
     const outline = textState.color === 1 ? "rgba(255,255,255,0.9)" : "rgba(10,10,14,0.85)";
-    const cy = H * [0.18, 0.5, 0.82][textState.pos];
+    const cx = W * textState.x;
+    const cy = H * textState.y;
     const lh = size * 1.2;
     const y0 = cy - ((lines.length - 1) * lh) / 2;
     lines.forEach((ln, i) => {
@@ -684,11 +685,11 @@ function updateTextTexture() {
       x.lineJoin = "round";
       x.lineWidth = size * 0.14;
       x.strokeStyle = outline;
-      x.strokeText(ln, W / 2, y);
+      x.strokeText(ln, cx, y);
       x.shadowColor = fill;
       x.shadowBlur = size * 0.35;
       x.fillStyle = fill;
-      x.fillText(ln, W / 2, y);
+      x.fillText(ln, cx, y);
       x.shadowBlur = 0;
     });
   }
@@ -709,16 +710,50 @@ const textSizeInput = document.getElementById("text-size");
 textInput.addEventListener("input", () => {
   textState.str = textInput.value;
   updateTextTexture();
+  canvas.classList.toggle("text-drag", !!textState.str.trim());
 });
 textSizeInput.addEventListener("input", () => {
   textState.size = +textSizeInput.value;
   document.getElementById("text-size-val").textContent = textState.size.toFixed(3);
   updateTextTexture();
 });
+for (const axis of ["x", "y"]) {
+  const input = document.getElementById(`text-${axis}`);
+  input.addEventListener("input", () => {
+    textState[axis] = +input.value;
+    document.getElementById(`text-${axis}-val`).textContent = (+input.value).toFixed(2);
+    updateTextTexture();
+  });
+}
+
+// プレビュー上のドラッグで文字を移動
+let textDrag = false;
+let textTexPending = false;
+canvas.addEventListener("pointerdown", (e) => {
+  if (!textState.str.trim()) return;
+  textDrag = true;
+  canvas.setPointerCapture(e.pointerId);
+  e.preventDefault();
+});
+canvas.addEventListener("pointermove", (e) => {
+  if (!textDrag) return;
+  const r = canvas.getBoundingClientRect();
+  textState.x = Math.min(0.95, Math.max(0.05, (e.clientX - r.left) / r.width));
+  textState.y = Math.min(0.94, Math.max(0.06, (e.clientY - r.top) / r.height));
+  syncTextUI();
+  if (!textTexPending) {
+    textTexPending = true;
+    requestAnimationFrame(() => {
+      textTexPending = false;
+      updateTextTexture();
+    });
+  }
+});
+canvas.addEventListener("pointerup", () => { textDrag = false; });
+
 for (const [segId, key] of [
   ["text-font-seg", "font"],
   ["text-color-seg", "color"],
-  ["text-pos-seg", "pos"],
 ]) {
   const seg = document.getElementById(segId);
   seg.querySelectorAll("button").forEach((b, i) => {
@@ -732,22 +767,33 @@ for (const [segId, key] of [
 }
 
 function applyTextRecipe(t) {
-  Object.assign(textState, TEXT_DEFAULTS, t && typeof t === "object" ? t : {});
-  textState.pos = Math.min(2, Math.max(0, textState.pos | 0));
+  const src = t && typeof t === "object" ? t : {};
+  Object.assign(textState, TEXT_DEFAULTS, src);
+  // 旧レシピ互換: pos(0/1/2) しかない場合は y に変換
+  if (typeof src.y !== "number" && typeof src.pos === "number") {
+    textState.y = [0.18, 0.5, 0.82][Math.min(2, Math.max(0, src.pos | 0))];
+  }
+  delete textState.pos;
+  textState.x = Math.min(0.95, Math.max(0.05, +textState.x || 0.5));
+  textState.y = Math.min(0.94, Math.max(0.06, +textState.y || 0.82));
   textState.color = Math.min(TEXT_COLORS.length - 1, Math.max(0, textState.color | 0));
   textState.font = Math.min(TEXT_FONTS.length - 1, Math.max(0, textState.font | 0));
   syncTextUI();
   updateTextTexture();
+  canvas.classList.toggle("text-drag", !!textState.str.trim());
 }
 
 function syncTextUI() {
   textInput.value = textState.str;
   textSizeInput.value = textState.size;
   document.getElementById("text-size-val").textContent = (+textState.size).toFixed(3);
+  for (const axis of ["x", "y"]) {
+    document.getElementById(`text-${axis}`).value = textState[axis];
+    document.getElementById(`text-${axis}-val`).textContent = (+textState[axis]).toFixed(2);
+  }
   for (const [segId, key] of [
     ["text-font-seg", "font"],
     ["text-color-seg", "color"],
-    ["text-pos-seg", "pos"],
   ]) {
     document.getElementById(segId).querySelectorAll("button")
       .forEach((b, i) => b.classList.toggle("sel", i === textState[key]));
@@ -1963,10 +2009,7 @@ function drawSunsetGrid(x, w, h) {
   x.font = "700 120px 'IBM Plex Mono', monospace";
   x.fillStyle = "#e8e6df";
   x.textAlign = "center";
-  x.fillText("NOIZ", w / 2, h * 0.87);
-  x.font = "28px 'DotGothic16', monospace";
-  x.fillStyle = "#c8ff00";
-  x.fillText("画像をドロップして加工開始", w / 2, h * 0.93);
+  x.fillText("NOIZ", w / 2, h * 0.88);
 }
 
 function drawNeonAlley(x, w, h) {
@@ -2258,5 +2301,6 @@ if (textHashMatch && textHashMatch[1].length < 200) {
     textState.str = decodeURIComponent(textHashMatch[1]).slice(0, 60);
     syncTextUI();
     updateTextTexture();
+    canvas.classList.add("text-drag");
   } catch { /* 無視 */ }
 }

@@ -104,9 +104,15 @@
       <div class="seg" id="text-color-seg">
         <button class="sel">白</button><button>黒</button><button>蛍光</button><button>ピンク</button>
       </div>
-      <div class="seg" id="text-pos-seg">
-        <button>上</button><button>中</button><button class="sel">下</button>
+      <div class="ctl">
+        <div class="ctl-label"><span>横位置</span><span class="val" id="text-x-val">0.50</span></div>
+        <input type="range" id="text-x" min="0.05" max="0.95" step="0.01" value="0.5" />
       </div>
+      <div class="ctl">
+        <div class="ctl-label"><span>縦位置</span><span class="val" id="text-y-val">0.82</span></div>
+        <input type="range" id="text-y" min="0.06" max="0.94" step="0.01" value="0.82" />
+      </div>
+      <p class="text-hint">プレビュー上をドラッグしても文字を動かせます</p>
     </div>
 
     <div class="panel-section">

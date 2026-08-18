@@ -275,6 +275,8 @@ body {
 }
 #text-input:focus { border-color: var(--acid); box-shadow: 0 0 8px rgba(200, 255, 0, 0.2); }
 .panel-section .seg { margin-top: 6px; }
+.text-hint { margin-top: 7px; font-size: 10.5px; color: #5a6150; }
+#view.text-drag { cursor: move; }
 
 /* ---- rack modules ---- */
 .module {

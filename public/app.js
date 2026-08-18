@@ -67,6 +67,12 @@ uniform float u_curve;
 uniform float u_scan;
 uniform float u_noise;
 uniform float u_vig;
+uniform float u_temp;   // 色温度 -1..1
+uniform float u_fade;   // 黒浮き 0..1
+uniform float u_split;  // ティール&オレンジ 0..1
+uniform float u_sat;    // 彩度 (1が等倍)
+uniform float u_con;    // コントラスト (1が等倍)
+uniform float u_leak;   // 光漏れ 0..1.5
 
 float hash(float n) { return fract(sin(n * 127.1 + u_seed * 311.7) * 43758.5453); }
 float hash2(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7)) + u_seed * 17.0) * 43758.5453); }
@@ -148,6 +154,27 @@ void main() {
     float d = length(p - center);
     float m = 1.0 - smoothstep(rad - 0.8, rad + 0.8, d);
     col = mix(vec3(0.955, 0.945, 0.915), sc * 0.82, m);
+  }
+
+  // カラーグレーディング（ハーフトーンがcolを再構成するためディザ類の後段に置く）
+  col *= vec3(1.0 + u_temp * 0.12, 1.0 + u_temp * 0.03, 1.0 - u_temp * 0.12);
+  col = col * (1.0 - u_fade * 0.28) + vec3(u_fade * 0.10, u_fade * 0.095, u_fade * 0.105);
+  float lum2 = dot(col, vec3(0.299, 0.587, 0.114));
+  vec3 st = mix(vec3(0.82, 1.02, 1.16), vec3(1.15, 1.0, 0.84), smoothstep(0.15, 0.85, lum2));
+  col = mix(col, col * st, u_split);
+  lum2 = dot(col, vec3(0.299, 0.587, 0.114));
+  col = mix(vec3(lum2), col, u_sat);
+  col = (col - 0.5) * u_con + 0.5;
+
+  // 光漏れ（位置はシード依存。振り直しで移動する）
+  if (u_leak > 0.0) {
+    vec2 asp = vec2(u_res.x / u_res.y, 1.0);
+    vec2 lp = vec2(0.86 + (hash(7.7) - 0.5) * 0.35, 0.24 + (hash(3.3) - 0.5) * 0.55);
+    float dl = distance(uv * asp, lp * asp);
+    float bloomL = exp(-dl * dl * 3.0);
+    float streak = exp(-pow((uv.y - lp.y - 0.28) * 2.6, 2.0)) * 0.35;
+    vec3 lc = mix(vec3(1.0, 0.45, 0.22), vec3(1.0, 0.30, 0.55), hash(9.1));
+    col += (bloomL * 0.9 + streak) * u_leak * lc;
   }
 
   // 走査線＋アパーチャグリル
@@ -255,10 +282,13 @@ const state = {
   dmode: 1, dscale: 3, levels: 4,
   curve: 0.4, scan: 0.5,
   noise: 0.3, vig: 0.4,
+  temp: 0.25, fade: 0.35, split: 0.5, sat: 1.1, con: 1.1,
+  leak: 0.7,
 };
 const DEFAULTS = { ...state };
 const enabled = {
   blur: false, sort: false, glitch: false, rgb: false, halation: false,
+  grade: false, leak: false,
   pixel: false, dither: false, crt: false, grain: false,
 };
 let seed = 1;
@@ -284,6 +314,16 @@ const MODULES = [
       { key: "halation", label: "強さ", min: 0, max: 1.5, step: 0.01 },
       { key: "halThresh", label: "しきい値", min: 0, max: 1, step: 0.01 },
     ] },
+  { id: "grade", name: "COLOR GRADE", jp: "色調エモ化",
+    params: [
+      { key: "temp", label: "色温度", min: -1, max: 1, step: 0.01 },
+      { key: "fade", label: "フェード", min: 0, max: 1, step: 0.01 },
+      { key: "split", label: "ティール&オレンジ", min: 0, max: 1, step: 0.01 },
+      { key: "sat", label: "彩度", min: 0, max: 2, step: 0.01 },
+      { key: "con", label: "コントラスト", min: 0.5, max: 1.6, step: 0.01 },
+    ] },
+  { id: "leak", name: "LIGHT LEAK", jp: "光漏れ", dice: true,
+    params: [{ key: "leak", label: "強さ", min: 0, max: 1.5, step: 0.01 }] },
   { id: "pixel", name: "PIXELATE", jp: "モザイク",
     params: [{ key: "pixel", label: "サイズ", min: 2, max: 64, step: 1 }] },
   { id: "dither", name: "DITHER", jp: "ディザ / 網点",
@@ -318,6 +358,15 @@ const PRESETS = [
     set: { pixel: 8, dmode: 1, dscale: 4, levels: 4 } },
   { name: "SORTED", on: { sort: 1, rgb: 1, grain: 1 },
     set: { sortLow: 0.3, sortHigh: 0.85, rgb: 6, noise: 0.1, vig: 0.2 } },
+  { name: "CINEMA", on: { grade: 1, halation: 1, grain: 1 },
+    set: { temp: 0.15, fade: 0.25, split: 0.75, sat: 1.05, con: 1.2,
+           halation: 0.55, halThresh: 0.6, noise: 0.12, vig: 0.4 } },
+  { name: "FILM", on: { grade: 1, leak: 1, grain: 1 },
+    set: { temp: 0.4, fade: 0.55, split: 0.25, sat: 0.85, con: 0.95,
+           leak: 0.85, noise: 0.3, vig: 0.3 } },
+  { name: "NEON", on: { grade: 1, rgb: 1, halation: 1, crt: 1 },
+    set: { temp: -0.25, fade: 0.1, split: 0.35, sat: 1.55, con: 1.2,
+           rgb: 5, halation: 0.9, halThresh: 0.5, curve: 0, scan: 0.25 } },
 ];
 
 const rack = document.getElementById("rack");
@@ -435,7 +484,7 @@ function applyPreset(pr) {
 }
 
 document.getElementById("btn-random").addEventListener("click", () => {
-  const pool = ["blur", "glitch", "rgb", "halation", "pixel", "dither", "crt", "grain", "sort"];
+  const pool = ["blur", "glitch", "rgb", "halation", "grade", "leak", "pixel", "dither", "crt", "grain", "sort"];
   Object.assign(state, DEFAULTS);
   for (const k of Object.keys(enabled)) enabled[k] = false;
   const count = 2 + Math.floor(Math.random() * 3);
@@ -453,6 +502,12 @@ document.getElementById("btn-random").addEventListener("click", () => {
   state.curve = Math.random() * 0.5;
   state.vig = Math.random() * 0.5;
   state.halation = 0.4 + Math.random() * 0.8;
+  state.temp = (Math.random() - 0.5) * 1.2;
+  state.fade = Math.random() * 0.6;
+  state.split = Math.random() * 0.9;
+  state.sat = 0.8 + Math.random() * 0.8;
+  state.con = 0.9 + Math.random() * 0.5;
+  state.leak = 0.3 + Math.random();
   seed = Math.random() * 100;
   syncUI();
   scheduleSort();
@@ -715,6 +770,12 @@ function render(time) {
   gl.uniform1f(u.u_scan, enabled.crt ? state.scan : 0);
   gl.uniform1f(u.u_noise, enabled.grain ? state.noise : 0);
   gl.uniform1f(u.u_vig, enabled.grain ? state.vig : 0);
+  gl.uniform1f(u.u_temp, enabled.grade ? state.temp : 0);
+  gl.uniform1f(u.u_fade, enabled.grade ? state.fade : 0);
+  gl.uniform1f(u.u_split, enabled.grade ? state.split : 0);
+  gl.uniform1f(u.u_sat, enabled.grade ? state.sat : 1);
+  gl.uniform1f(u.u_con, enabled.grade ? state.con : 1);
+  gl.uniform1f(u.u_leak, enabled.leak ? state.leak : 0);
   gl.drawArrays(gl.TRIANGLES, 0, 3);
 }
 
@@ -1373,4 +1434,8 @@ function makeSample() {
   document.getElementById("drop-hint").style.display = "";
 }
 makeSample();
-applyPreset(PRESETS[1]); // 初期表示は Y2K プリセットでデモ
+// URLハッシュでプリセット指定可（例: /#preset=CINEMA）。指定なしはY2Kでデモ
+const presetMatch = location.hash.match(/preset=([A-Z0-9]+)/i);
+const initialPreset =
+  (presetMatch && PRESETS.find((p) => p.name === presetMatch[1].toUpperCase())) || PRESETS[1];
+applyPreset(initialPreset);

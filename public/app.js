@@ -2522,6 +2522,7 @@ viewToggle.addEventListener("click", () => {
   viewToggle.textContent = graphMode ? "▤ 一覧" : "◈ グラフ";
   galleryGrid.hidden = graphMode;
   graphWrap.hidden = !graphMode;
+  if (!graphMode) suggestPanel.hidden = true;
   if (graphMode) startGraph();
 });
 
@@ -2911,6 +2912,273 @@ async function repairEmbeddings() {
     setGalleryNote(`${done}件を解析してグラフを更新しました。`);
   }
 }
+
+// ---------------------------------------------------------------- 提案（グラフの穴 → 次の一手）
+
+const suggestPanel = document.getElementById("suggest-panel");
+const suggestBtn = document.getElementById("btn-suggest");
+
+// 類似エッジから連結成分（作品の「島」）を求める
+function graphComponents(n, edges) {
+  const parent = [...Array(n).keys()];
+  const find = (x) => {
+    while (parent[x] !== x) { parent[x] = parent[parent[x]]; x = parent[x]; }
+    return x;
+  };
+  for (const e of edges) {
+    const ra = find(e.a), rb = find(e.b);
+    if (ra !== rb) parent[ra] = rb;
+  }
+  const comps = new Map();
+  for (let i = 0; i < n; i++) {
+    const r = find(i);
+    if (!comps.has(r)) comps.set(r, []);
+    comps.get(r).push(i);
+  }
+  return [...comps.values()];
+}
+
+function pairSim(i, j, rvecs) {
+  const a = gNodes[i].work, b = gNodes[j].work;
+  const rs = Math.max(0, cosine(rvecs[i], rvecs[j]));
+  if (Array.isArray(a.embedding) && Array.isArray(b.embedding)) {
+    const es = Math.min(1, Math.max(0, (cosine(a.embedding, b.embedding) - 0.55) / 0.4));
+    return 0.6 * es + 0.4 * rs;
+  }
+  return rs * 0.8;
+}
+
+const shortCap = (w) => (w.caption || w.prompt || "無題").slice(0, 42);
+
+// グラフの構造的な穴を検出する。LLMには渡さず先に機械的な提案として出せる形にする。
+function analyzeGaps() {
+  const N = gNodes.length;
+  const gaps = [];
+  if (!N) return gaps;
+  const rvecs = gNodes.map((n) => recipeVec(n.work.recipe));
+
+  // A: 離れたまとまりどうしの橋渡し。
+  // 表示用エッジは各ノードの上位3件なので必ずほぼ連結になる。
+  // 強い類似(0.5以上)だけを残して初めて本当の「まとまり」が見える。
+  const STRONG = 0.5;
+  const comps = graphComponents(N, gEdges.filter((e) => e.w >= STRONG));
+  if (comps.length >= 2) {
+    let best = null;
+    for (let ci = 0; ci < comps.length; ci++) {
+      for (let cj = ci + 1; cj < comps.length; cj++) {
+        for (const i of comps[ci]) {
+          for (const j of comps[cj]) {
+            const s = pairSim(i, j, rvecs);
+            if (!best || s > best.s) best = { s, i, j };
+          }
+        }
+      }
+    }
+    if (best) {
+      const A = gNodes[best.i].work, B = gNodes[best.j].work;
+      gaps.push({
+        kind: "bridge",
+        kindLabel: "離れたまとまり",
+        title: "2つの系統をつなぐ作品",
+        why: `「${shortCap(A)}」側と「${shortCap(B)}」側の間が空いています`,
+        desc: `The collection splits into ${comps.length} loosely related groups. The closest pair across groups is "${shortCap(A)}" and "${shortCap(B)}". A work sitting between these two would fill the space between the groups.`,
+        bridge: [best.i, best.j],
+      });
+    }
+  }
+
+  // B: 個別には使ったのにペアで使っていないエフェクトの組み合わせ
+  const useCount = {};
+  const pairSeen = new Set();
+  for (const n of gNodes) {
+    const en = n.work.recipe?.enabled ?? {};
+    const on = MODULES.filter((m) => en[m.id]).map((m) => m.id);
+    for (const id of on) useCount[id] = (useCount[id] ?? 0) + 1;
+    for (let a = 0; a < on.length; a++) {
+      for (let b = a + 1; b < on.length; b++) {
+        pairSeen.add([on[a], on[b]].sort().join("|"));
+      }
+    }
+  }
+  const combos = [];
+  for (let a = 0; a < MODULES.length; a++) {
+    for (let b = a + 1; b < MODULES.length; b++) {
+      const ma = MODULES[a], mb = MODULES[b];
+      const ua = useCount[ma.id] ?? 0, ub = useCount[mb.id] ?? 0;
+      if (ua < 1 || ub < 1) continue;
+      if (pairSeen.has([ma.id, mb.id].sort().join("|"))) continue;
+      // 両方よく使うのに一緒に使っていない組ほど上位。同点はランダムで揺らす
+      combos.push({ ma, mb, score: ua + ub + Math.random() * 0.6 });
+    }
+  }
+  combos.sort((x, y) => y.score - x.score);
+  for (const c of combos.slice(0, 2)) {
+    gaps.push({
+      kind: "combo",
+      kindLabel: "未使用の組み合わせ",
+      title: `${c.ma.name} × ${c.mb.name}`,
+      why: `${c.ma.jp}と${c.mb.jp}を同時に使った作品がまだありません`,
+      desc: `The effects "${c.ma.name} (${c.ma.jp})" and "${c.mb.name} (${c.mb.jp})" have each been used separately but never together in one work.`,
+      combo: [c.ma.id, c.mb.id],
+    });
+  }
+
+  // 一度も使っていないエフェクト
+  const never = MODULES.filter((m) => !useCount[m.id]);
+  if (never.length && gaps.length < 4) {
+    const m = never[Math.floor(Math.random() * never.length)];
+    gaps.push({
+      kind: "unused",
+      kindLabel: "未使用のエフェクト",
+      title: `${m.name} をまだ使っていない`,
+      why: `${m.jp}を使った作品が1つもありません`,
+      desc: `The effect "${m.name} (${m.jp})" has never been used in any work.`,
+      combo: [m.id],
+    });
+  }
+
+  // C: まだ一度も掛け合わせていない作品
+  if (gaps.length < 4) {
+    const parents = new Set();
+    for (const n of gNodes) {
+      if (n.work.parent_a) parents.add(n.work.parent_a);
+      if (n.work.parent_b) parents.add(n.work.parent_b);
+    }
+    const unbred = gNodes.filter((n) => !parents.has(n.id));
+    if (unbred.length) {
+      const w = unbred[0].work;
+      gaps.push({
+        kind: "unbred",
+        kindLabel: "未交配",
+        title: "まだ枝分かれしていない作品",
+        why: `「${shortCap(w)}」から派生した作品がまだありません`,
+        desc: `The work "${shortCap(w)}" has never been used as a parent. Its lineage has no branches yet.`,
+        mutate: gNodes.indexOf(unbred[0]),
+      });
+    }
+  }
+
+  return gaps.slice(0, 4);
+}
+
+function suggestionRecipe(gap) {
+  const e = {};
+  for (const id of gap.combo || []) e[id] = true;
+  return { e, s: {}, seed: Math.random() * 100, t: { ...TEXT_DEFAULTS } };
+}
+
+function renderSuggestions(gaps, loading) {
+  suggestPanel.hidden = false;
+  suggestPanel.innerHTML = "";
+  const head = document.createElement("p");
+  head.className = "sg-head";
+  head.textContent = loading
+    ? `${gaps.length}件の穴を検出。AIが提案を書いています…`
+    : `${gaps.length}件の穴と、それを埋める提案`;
+  suggestPanel.appendChild(head);
+
+  gaps.forEach((gap, idx) => {
+    const card = document.createElement("div");
+    card.className = "sg-card";
+    card.innerHTML =
+      `<div class="sg-kind">${gap.kindLabel}</div>` +
+      `<div class="sg-title"></div><div class="sg-why"></div>` +
+      `<div class="sg-actions"></div>`;
+    card.querySelector(".sg-title").textContent = gap.ai?.title
+      ? `${gap.ai.title}（${gap.title}）`
+      : gap.title;
+    card.querySelector(".sg-why").textContent = gap.ai?.why || gap.why;
+    const acts = card.querySelector(".sg-actions");
+    const mk = (label, fn) => {
+      const b = document.createElement("button");
+      b.className = "btn";
+      b.textContent = label;
+      b.addEventListener("click", fn);
+      acts.appendChild(b);
+    };
+
+    if (gap.bridge) {
+      const A = gNodes[gap.bridge[0]], B = gNodes[gap.bridge[1]];
+      if (A && B) {
+        mk("◇ 掛け合わせる", () =>
+          spawnChild(crossRecipes(A.work.recipe, B.work.recipe), A.work, [A.id, B.id]));
+      }
+    }
+    if (gap.combo) {
+      mk("このレシピで作る", () => {
+        applyRecipeObject(suggestionRecipe(gap));
+        closeGallery();
+      });
+    }
+    if (typeof gap.mutate === "number") {
+      const n = gNodes[gap.mutate];
+      if (n) mk("⚡ 突然変異", () => spawnChild(mutateRecipe(n.work.recipe), n.work, [n.id]));
+    }
+    if (gap.ai?.scenePrompt) {
+      mk("シーンを作る", async () => {
+        if (gap.combo) applyRecipeObject(suggestionRecipe(gap));
+        aiPrompt.value = gap.ai.scenePrompt;
+        closeGallery();
+        await generateScene();
+      });
+    }
+    suggestPanel.appendChild(card);
+  });
+
+  if (loading) {
+    const p = document.createElement("p");
+    p.className = "sg-loading";
+    p.textContent = "AIの提案が届くと、タイトルと「シーンを作る」ボタンが追加されます。";
+    suggestPanel.appendChild(p);
+  }
+}
+
+async function runSuggest() {
+  if (!gNodes.length) {
+    setGalleryNote("提案にはカットではなく保存作品が必要です。", true);
+    return;
+  }
+  suggestBtn.disabled = true;
+  suggestBtn.textContent = "分析中…";
+  const gaps = analyzeGaps();
+  if (!gaps.length) {
+    suggestPanel.hidden = false;
+    suggestPanel.innerHTML = '<p class="sg-head">目立った穴は見つかりませんでした。作品を増やすと精度が上がります。</p>';
+    suggestBtn.disabled = false;
+    suggestBtn.textContent = "◇ 次の一手";
+    return;
+  }
+  // まず機械的な提案を出し、AIの言語化は後から差し込む（AI枠切れでも機能する）
+  renderSuggestions(gaps, true);
+  try {
+    const res = await fetch("/api/suggest", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-gallery-key": galleryKey() },
+      body: JSON.stringify({
+        captions: gNodes.map((n) => n.work.caption).filter(Boolean),
+        gaps: gaps.map((g) => ({ kind: g.kind, desc: g.desc })),
+      }),
+    });
+    if (res.ok) {
+      const { suggestions } = await res.json();
+      if (Array.isArray(suggestions)) {
+        suggestions.forEach((s, i) => {
+          if (gaps[i] && s && typeof s === "object") {
+            gaps[i].ai = {
+              title: typeof s.title === "string" ? s.title.slice(0, 40) : null,
+              why: typeof s.why === "string" ? s.why.slice(0, 80) : null,
+              scenePrompt: typeof s.scenePrompt === "string" ? s.scenePrompt.slice(0, 60) : null,
+            };
+          }
+        });
+      }
+    }
+  } catch { /* AIが使えなくても機械的な提案は表示済み */ }
+  renderSuggestions(gaps, false);
+  suggestBtn.disabled = false;
+  suggestBtn.textContent = "◇ 次の一手";
+}
+suggestBtn.addEventListener("click", runSuggest);
 
 // ---------------------------------------------------------------- 初期サンプル画像
 

@@ -521,6 +521,29 @@ input[type="range"]::-moz-range-thumb {
 }
 #graph-canvas:active { cursor: grabbing; }
 
+/* ---- suggestions (graph gaps) ---- */
+#suggest-panel { margin-top: 14px; display: grid; gap: 10px; }
+#suggest-panel[hidden] { display: none; }
+.sg-head {
+  font-family: var(--font-dot); font-size: 12px; letter-spacing: 1px;
+  color: var(--ink-dim);
+}
+.sg-card {
+  border: 1px solid var(--line-hi);
+  background: linear-gradient(to bottom, #171b12, #101308);
+  padding: 12px 14px;
+  clip-path: polygon(0 0, calc(100% - 10px) 0, 100% 10px, 100% 100%, 0 100%);
+}
+.sg-kind {
+  font-family: var(--font-dot); font-size: 11px; letter-spacing: 1px;
+  color: var(--magenta); margin-bottom: 4px;
+}
+.sg-title { font-size: 14px; font-weight: 500; color: var(--ink); }
+.sg-why { font-size: 11.5px; color: var(--ink-dim); margin-top: 3px; }
+.sg-actions { display: flex; gap: 6px; margin-top: 9px; flex-wrap: wrap; }
+.sg-actions .btn { font-size: 11px; padding: 4px 10px; }
+.sg-loading { font-size: 11px; color: #5a6150; }
+
 /* ---- responsive ---- */
 @media (max-width: 860px) {
   .layout { grid-template-columns: 1fr; }

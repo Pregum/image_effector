@@ -282,18 +282,27 @@ const SCENE_SYSTEM = [
   'Example. User: 桜舞う神社の夕暮れ → {"sky":["#4a2c5e","#c66a8a","#ffb98a"],"horizon":0.7,"celestial":{"type":"sun","x":0.35,"y":0.45,"r":0.07,"color":"#ffdca0","glow":"#ff8a5c"},"stars":0,"clouds":{"count":3,"color":"#7a4a6e"},"ground":{"type":"plain","colors":["#241530"]},"rain":0,"snow":0,"sakura":90,"birds":3,"fireworks":[],"aurora":null,"torii":{"x":0.5,"size":0.42,"color":"#2e0f1c"},"signs":[]}',
 ].join("\n");
 
-// 応答の前後にゴミが付いても最後にパースできる閉じ括弧まで遡って抽出する
+// 応答の前後にゴミが付いても最後にパースできる閉じ括弧まで遡って抽出する（配列/オブジェクト両対応）
 function extractJson(text) {
-  const start = text.indexOf("{");
-  if (start < 0) return null;
-  let end = text.lastIndexOf("}");
-  while (end > start) {
-    try {
-      return JSON.parse(text.slice(start, end + 1));
-    } catch { /* ひとつ前の閉じ括弧で再試行 */ }
-    end = text.lastIndexOf("}", end - 1);
+  const tryFrom = (open, close) => {
+    const start = text.indexOf(open);
+    if (start < 0) return null;
+    let end = text.lastIndexOf(close);
+    while (end > start) {
+      try {
+        return JSON.parse(text.slice(start, end + 1));
+      } catch { /* ひとつ前の閉じ括弧で再試行 */ }
+      end = text.lastIndexOf(close, end - 1);
+    }
+    return null;
+  };
+  const objAt = text.indexOf("{");
+  const arrAt = text.indexOf("[");
+  // 先に現れた方を優先して試す
+  if (arrAt >= 0 && (objAt < 0 || arrAt < objAt)) {
+    return tryFrom("[", "]") ?? tryFrom("{", "}");
   }
-  return null;
+  return tryFrom("{", "}") ?? tryFrom("[", "]");
 }
 
 async function sceneRoute(req, env) {
@@ -337,6 +346,73 @@ async function sceneRoute(req, env) {
   }
 }
 
+// ナレッジグラフの「穴」から次に作る作品を提案する。
+// 穴の検出はクライアント側で済ませ、ここは言語化だけを担当する。
+const SUGGEST_SYSTEM = [
+  "You help an artist decide what image to create next, based on gaps found in their artwork collection graph.",
+  "Reply with ONLY minified JSON: an array of objects, one per gap, in the same order as the input gaps.",
+  'Each object: {"title":"短い日本語の作品タイトル案(15文字以内)","why":"なぜ今これを作ると良いかを1文で(40文字以内、日本語)","scenePrompt":"シーン生成用の日本語プロンプト(30文字以内)"}',
+  "The scene renderer is a flat vector-style landscape drawer. Its motifs are limited to: 空/グラデーション, 太陽, 月, 星, 雲, 海, 遠近グリッド, 山, 街のシルエット, 雨, 雪, 桜の花びら, 花火, オーロラ, 鳥居, ネオン看板, 鳥.",
+  "scenePrompt MUST be renderable with only those motifs. Never ask for people, animals (except birds), close-up objects, or photorealism.",
+  "Make each suggestion concretely different from the existing works described in the input.",
+].join("\n");
+
+async function suggestRoute(req, env) {
+  if (!authed(req, env)) return json({ error: "unauthorized" }, 401);
+  if (!(await rateLimit(env, clientIp(req) + "#suggest", 10))) {
+    return json({ error: "rate limited" }, 429);
+  }
+  let body;
+  try {
+    body = await req.json();
+  } catch {
+    return json({ error: "invalid json" }, 400);
+  }
+  const gaps = Array.isArray(body?.gaps) ? body.gaps.slice(0, 5) : [];
+  if (!gaps.length) return json({ error: "no gaps" }, 400);
+  const captions = (Array.isArray(body?.captions) ? body.captions : [])
+    .filter((c) => typeof c === "string" && c.trim())
+    .slice(0, 12)
+    .map((c) => c.slice(0, 120));
+
+  const userMsg = [
+    captions.length
+      ? `Existing works in the collection:\n${captions.map((c, i) => `${i + 1}. ${c}`).join("\n")}`
+      : "The collection is nearly empty.",
+    "",
+    "Gaps found in the collection graph:",
+    ...gaps.map((g, i) => `${i + 1}. [${String(g?.kind ?? "gap").slice(0, 24)}] ${String(g?.desc ?? "").slice(0, 200)}`),
+  ].join("\n");
+
+  try {
+    const r = await env.AI.run("@cf/meta/llama-3.3-70b-instruct-fp8-fast", {
+      messages: [
+        { role: "system", content: SUGGEST_SYSTEM },
+        { role: "user", content: userMsg },
+      ],
+      max_tokens: 700,
+    });
+    const raw = r?.response;
+    // モデル/ランタイムによりresponseが文字列でなくパース済みの場合がある
+    let parsed = raw && typeof raw === "object" ? raw : extractJson(String(raw ?? ""));
+    if (parsed && !Array.isArray(parsed)) {
+      parsed = Array.isArray(parsed.suggestions) ? parsed.suggestions : [parsed];
+    }
+    if (!Array.isArray(parsed)) {
+      console.error("suggest parse failed:", String(raw).slice(0, 200));
+      return json({ error: "parse failed" }, 502);
+    }
+    return json({ suggestions: parsed.slice(0, gaps.length) });
+  } catch (e) {
+    const msg = e?.message ?? String(e);
+    console.error("suggest failed:", msg);
+    if (msg.includes("4006") || msg.includes("neurons")) {
+      return json({ error: "quota exceeded" }, 503);
+    }
+    return json({ error: "suggest failed" }, 500);
+  }
+}
+
 export default {
   async fetch(req, env, ctx) {
     const url = new URL(req.url);
@@ -348,6 +424,8 @@ export default {
     if (pathname === "/api/scene" && req.method === "POST") {
       return sceneRoute(req, env);
     }
+
+    if (pathname === "/api/suggest" && req.method === "POST") return suggestRoute(req, env);
 
     if (pathname === "/api/works" && req.method === "POST") return saveWork(req, env, ctx);
     if (pathname === "/api/works" && req.method === "GET") return listWorks(req, env);

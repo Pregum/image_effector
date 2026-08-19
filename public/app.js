@@ -2950,6 +2950,10 @@ if (recipeHashMatch && recipeHashMatch[1].length < 4000) {
     applyRecipeObject(JSON.parse(b64urlDecode(recipeHashMatch[1])));
   } catch { /* 不正なレシピURLは無視 */ }
 }
+// PWA: オフライン時のフォールバック用Service Worker（ネットワーク優先）
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("/sw.js").catch(() => { /* 非対応環境は無視 */ });
+}
 // 文字入れもハッシュ指定可（例: /#text=夏の終わり|1999）。#r=がある場合はそちらを優先
 const textHashMatch = recipeHashMatch ? null : location.hash.match(/text=([^&]+)/);
 if (textHashMatch && textHashMatch[1].length < 200) {

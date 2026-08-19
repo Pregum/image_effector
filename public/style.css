@@ -526,7 +526,24 @@ input[type="range"]::-moz-range-thumb {
   .layout { grid-template-columns: 1fr; }
   .panel { position: static; max-height: none; border-left: none; border-top: 1px solid var(--line); }
   #view { max-height: 52vh; }
-  .topbar { flex-wrap: wrap; }
-  .topbar-actions { width: 100%; margin-left: 0; }
-  .stage { padding: 16px; }
+  .topbar { flex-wrap: wrap; padding: 10px 12px; gap: 8px; }
+  .logo { font-size: 20px; }
+  .logo-sub { display: none; }
+  .topbar-actions { width: 100%; margin-left: 0; gap: 6px; display: grid; grid-template-columns: repeat(3, 1fr); }
+  .topbar-actions .btn { font-size: 12px; padding: 8px 4px; }
+  .ai-row { flex-wrap: wrap; }
+  .stage { padding: 12px; }
+  .stage-status { flex-wrap: wrap; gap: 8px; }
+  .ratio-label { margin-left: 0; }
+  .gallery-overlay { padding: 2vh 2vw; }
+}
+
+/* タッチ端末はスライダーのつまみとタップ領域を大きく */
+@media (pointer: coarse) {
+  input[type="range"] { height: 28px; }
+  input[type="range"]::-webkit-slider-thumb { width: 20px; height: 20px; margin-top: -8.5px; }
+  input[type="range"]::-moz-range-thumb { width: 20px; height: 20px; }
+  .module-head { padding: 12px; }
+  .preset-chip { padding: 8px 12px; }
+  .seg button { padding: 8px 2px; }
 }

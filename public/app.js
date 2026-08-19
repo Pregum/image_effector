@@ -840,23 +840,23 @@ const TEXT_FONTS = [
 ];
 const TEXT_COLORS = ["#ffffff", "#0b0d0c", "#c8ff00", "#ff3ea5"];
 
-function updateTextTexture() {
-  if (!W || !H) return;
+// 文字入れ設定からW×Hのオーバーレイキャンバスを描く（エディタ用・カット用で共用）
+function makeTextCanvas(ts, w, h) {
   const c = document.createElement("canvas");
-  c.width = W;
-  c.height = H;
+  c.width = w;
+  c.height = h;
   const x = c.getContext("2d");
-  if (textState.str.trim()) {
-    const lines = textState.str.split("|").map((s) => s.trim()).filter(Boolean).slice(0, 3);
-    const size = textState.size * W;
-    const [weight, family] = TEXT_FONTS[textState.font] || TEXT_FONTS[0];
+  if (ts.str && ts.str.trim()) {
+    const lines = ts.str.split("|").map((s) => s.trim()).filter(Boolean).slice(0, 3);
+    const size = ts.size * w;
+    const [weight, family] = TEXT_FONTS[ts.font] || TEXT_FONTS[0];
     x.font = `${weight} ${size}px ${family}`;
     x.textAlign = "center";
     x.textBaseline = "middle";
-    const fill = TEXT_COLORS[textState.color] || "#ffffff";
-    const outline = textState.color === 1 ? "rgba(255,255,255,0.9)" : "rgba(10,10,14,0.85)";
-    const cx = W * textState.x;
-    const cy = H * textState.y;
+    const fill = TEXT_COLORS[ts.color] || "#ffffff";
+    const outline = ts.color === 1 ? "rgba(255,255,255,0.9)" : "rgba(10,10,14,0.85)";
+    const cx = w * ts.x;
+    const cy = h * ts.y;
     const lh = size * 1.2;
     const y0 = cy - ((lines.length - 1) * lh) / 2;
     lines.forEach((ln, i) => {
@@ -872,6 +872,12 @@ function updateTextTexture() {
       x.shadowBlur = 0;
     });
   }
+  return c;
+}
+
+function updateTextTexture() {
+  if (!W || !H) return;
+  const c = makeTextCanvas(textState, W, H);
   gl.bindTexture(gl.TEXTURE_2D, textTex);
   gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
   gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, c);
@@ -1052,10 +1058,45 @@ document.getElementById("btn-save").addEventListener("click", () => {
 // ---------------------------------------------------------------- ショート動画（カット列＋トランジション）
 
 const MAX_SLIDES = 8;
-const slides = []; // {bmp, tex, thumb}
-const seqState = { mode: 3, hold: 1.0, trans: 0.6, zoom: true };
+const slides = []; // {bmp, tex, thumb, recipe, override, textTex}
+const seqState = { mode: 3, hold: 1.0, trans: 0.6, zoom: true, percut: true };
 let seqPlaying = null; // {start, hold, trans, blit, onend}
 let seqFrame = null;   // 再生中のフレーム情報 {texA, texB, t, zoomA, zoomB}
+let seqOverride = null; // 再生中カットのエフェクト設定（nullなら編集中の設定を使用）
+
+// カット追加時のレシピからrender用オーバーライドを構築する
+function buildSlideOverride(s) {
+  if (!s.recipe) { s.override = null; return; }
+  const r = s.recipe;
+  const en = {};
+  for (const k of Object.keys(enabled)) en[k] = !!r.enabled?.[k];
+  en.sort = false; // ピクセルソートはカット画像に焼き込み済み
+  let textTexS = null;
+  let textOn = false;
+  if (r.text && typeof r.text.str === "string" && r.text.str.trim() && W && H) {
+    textOn = true;
+    if (!s.textTex) s.textTex = makeTex();
+    const c = makeTextCanvas({ ...TEXT_DEFAULTS, ...r.text }, W, H);
+    gl.bindTexture(gl.TEXTURE_2D, s.textTex);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, c);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+  }
+  s.override = {
+    enabled: en,
+    state: { ...DEFAULTS, ...(r.state || {}) },
+    seed: typeof r.seed === "number" ? r.seed : 1,
+    textTex: textTexS = textOn ? s.textTex : null,
+    textOn,
+  };
+}
+
+// 再生位置に応じて使うカット設定（遷移の中間で切り替える）
+function overrideFor(aIdx, bIdx, t) {
+  if (!seqState.percut) return null;
+  const s = t < 0.5 ? slides[aIdx] : slides[bIdx];
+  return s?.override ?? null;
+}
 const transBtn = document.getElementById("btn-transition");
 const transNote = document.getElementById("trans-note");
 const slideStrip = document.getElementById("slide-strip");
@@ -1093,7 +1134,10 @@ function uploadSlide(s) {
 }
 
 function uploadAllSlides() {
-  for (const s of slides) uploadSlide(s);
+  for (const s of slides) {
+    uploadSlide(s);
+    buildSlideOverride(s); // 文字テクスチャは解像度依存のため作り直す
+  }
 }
 
 function seqTotalSec() {
@@ -1114,12 +1158,28 @@ function renderSlideStrip() {
   slides.forEach((s, i) => {
     const d = document.createElement("div");
     d.className = "slide-item";
+    d.draggable = true;
     d.innerHTML =
       `<img src="${s.thumb}" alt="カット${i + 1}" />` +
       `<button class="work-del" title="削除">✕</button><span class="slide-num">${i + 1}</span>`;
     d.querySelector("button").addEventListener("click", () => {
       gl.deleteTexture(slides[i].tex);
+      if (slides[i].textTex) gl.deleteTexture(slides[i].textTex);
       slides.splice(i, 1);
+      renderSlideStrip();
+    });
+    // ドラッグでカットの並び替え
+    d.addEventListener("dragstart", (e) => {
+      e.dataTransfer.setData("text/plain", String(i));
+      e.dataTransfer.effectAllowed = "move";
+    });
+    d.addEventListener("dragover", (e) => e.preventDefault());
+    d.addEventListener("drop", (e) => {
+      e.preventDefault();
+      const from = parseInt(e.dataTransfer.getData("text/plain"), 10);
+      if (isNaN(from) || from === i) return;
+      const [moved] = slides.splice(from, 1);
+      slides.splice(i, 0, moved);
       renderSlideStrip();
     });
     slideStrip.appendChild(d);
@@ -1127,13 +1187,14 @@ function renderSlideStrip() {
   updateSeqNote();
 }
 
-async function addSlideBitmap(bmp) {
+async function addSlideBitmap(bmp, recipe = null) {
   if (slides.length >= MAX_SLIDES) {
     transNote.textContent = `カットは最大${MAX_SLIDES}枚までです。`;
     return;
   }
-  const s = { bmp, tex: makeTex(), thumb: null };
+  const s = { bmp, tex: makeTex(), thumb: null, recipe, override: null, textTex: null };
   uploadSlide(s);
+  buildSlideOverride(s);
   const tc = document.createElement("canvas");
   tc.width = 96;
   tc.height = 64;
@@ -1147,7 +1208,16 @@ async function addSlideBitmap(bmp) {
 
 document.getElementById("slide-add").addEventListener("click", async () => {
   if (!originalData) return;
-  addSlideBitmap(await createImageBitmap(originalData));
+  // カットごとの設定用に、いまのラック設定+文字をレシピとして記録する。
+  // ピクセルソートは画像に焼き込んでフラグを落とす（動画中は再計算できないため）
+  const rec = currentRecipe();
+  let data = originalData;
+  if (enabled.sort) {
+    const lo = Math.min(state.sortLow, state.sortHigh);
+    const hi = Math.max(state.sortLow, state.sortHigh);
+    data = pixelSorted(originalData, lo, hi, state.sortVert === 1);
+  }
+  addSlideBitmap(await createImageBitmap(data), rec);
 });
 const transbInput = document.getElementById("transb-input");
 document.getElementById("slide-add-file").addEventListener("click", () => transbInput.click());
@@ -1183,6 +1253,9 @@ document.getElementById("trans-duration").addEventListener("input", (e) => {
 document.getElementById("chk-zoom").addEventListener("change", (e) => {
   seqState.zoom = e.target.checked;
 });
+document.getElementById("chk-percut").addEventListener("change", (e) => {
+  seqState.percut = e.target.checked;
+});
 
 // ---- プレビュータブ（編集=静止画 / プレビュー=カット列をループ再生）
 let previewMode = false;
@@ -1199,7 +1272,7 @@ function setPreviewMode(on) {
   previewStart = performance.now();
   tabEdit.classList.toggle("sel", !on);
   tabPreview.classList.toggle("sel", on);
-  if (!on) seqFrame = null;
+  if (!on) { seqFrame = null; seqOverride = null; }
   markDirty();
 }
 tabEdit.addEventListener("click", () => setPreviewMode(false));
@@ -1402,6 +1475,7 @@ async function exportSequence() {
     try { audioCtx?.close(); } catch { /* noop */ }
     seqPlaying = null;
     seqFrame = null;
+    seqOverride = null;
     markDirty();
     transBtn.textContent = "▶ 動画書き出し";
     // 結果メッセージを残すため、ここではボタン状態のみ戻す
@@ -1590,6 +1664,7 @@ async function exportGif() {
         texA: slides[s.a].tex, texB: slides[s.b].tex,
         t: s.t, zoomA: s.zoomA, zoomB: s.zoomB,
       };
+      seqOverride = overrideFor(s.a, s.b, s.t);
       render(tMs / 1000); // 仮想時刻。ウィンドウが隠れていても進む
       octx.drawImage(canvas, sx, sy, sw, sh, 0, 0, ow, oh);
       frames.push(octx.getImageData(0, 0, ow, oh));
@@ -1599,6 +1674,7 @@ async function exportGif() {
       }
     }
     seqFrame = null;
+    seqOverride = null;
     markDirty();
 
     gifBtn.textContent = "エンコード中…";
@@ -1616,6 +1692,7 @@ async function exportGif() {
     transNote.textContent = "GIFの書き出しに失敗しました。";
   } finally {
     seqFrame = null;
+    seqOverride = null;
     markDirty();
     gifBtn.textContent = "◉ GIF書き出し";
     gifBtn.disabled = slides.length < 1;
@@ -2097,6 +2174,12 @@ function pass(p, tex, target, setup) {
 function render(time) {
   if (!originalData) return;
 
+  // カットごとの設定が有効な再生中は、そのカットのレシピで描画する
+  const ov = seqOverride;
+  const en = ov ? ov.enabled : enabled;
+  const st = ov ? ov.state : state;
+  const sd = ov ? ov.seed : seed;
+
   let base = srcTex;
 
   // シーケンス再生中はカット同士を合成したものをソースとして流す
@@ -2114,13 +2197,13 @@ function render(time) {
     gl.uniform1f(tu.u_t, seqFrame.t);
     gl.uniform1i(tu.u_mode, seqState.mode);
     gl.uniform2f(tu.u_res, W, H);
-    gl.uniform1f(tu.u_seed2, seed);
+    gl.uniform1f(tu.u_seed2, sd);
     gl.uniform1f(tu.u_zoomA, seqFrame.zoomA);
     gl.uniform1f(tu.u_zoomB, seqFrame.zoomB);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     base = fboT.tex;
   }
-  const blurR = enabled.blur ? state.blur : 0;
+  const blurR = en.blur ? st.blur : 0;
   if (blurR > 0.25) {
     pass(blurP, base, fboA, (u) => {
       gl.uniform2f(u.u_dir, 1, 0); gl.uniform2f(u.u_res, W, H); gl.uniform1f(u.u_radius, blurR);
@@ -2132,10 +2215,10 @@ function render(time) {
   }
 
   let glow = blackTex;
-  const hal = enabled.halation ? state.halation : 0;
+  const hal = en.halation ? st.halation : 0;
   if (hal > 0.01) {
     const glowR = Math.min(40, Math.max(8, W * 0.012));
-    pass(brightP, base, fboC, (u) => { gl.uniform1f(u.u_thresh, state.halThresh); });
+    pass(brightP, base, fboC, (u) => { gl.uniform1f(u.u_thresh, st.halThresh); });
     pass(blurP, fboC.tex, fboD, (u) => {
       gl.uniform2f(u.u_dir, 1, 0); gl.uniform2f(u.u_res, W, H); gl.uniform1f(u.u_radius, glowR);
     });
@@ -2157,29 +2240,30 @@ function render(time) {
   gl.uniform1i(u.u_glow, 1);
   gl.uniform2f(u.u_res, W, H);
   gl.uniform1f(u.u_time, time);
-  gl.uniform1f(u.u_seed, seed);
-  gl.uniform1f(u.u_glitch, enabled.glitch ? state.glitch : 0);
-  gl.uniform1f(u.u_rgb, enabled.rgb ? state.rgb : 0);
+  gl.uniform1f(u.u_seed, sd);
+  gl.uniform1f(u.u_glitch, en.glitch ? st.glitch : 0);
+  gl.uniform1f(u.u_rgb, en.rgb ? st.rgb : 0);
   gl.uniform1f(u.u_halation, hal);
-  gl.uniform1f(u.u_pixel, enabled.pixel ? state.pixel : 0);
-  gl.uniform1i(u.u_dmode, enabled.dither ? state.dmode : 0);
-  gl.uniform1f(u.u_dscale, state.dscale);
-  gl.uniform1f(u.u_levels, state.levels);
-  gl.uniform1f(u.u_curve, enabled.crt ? state.curve : 0);
-  gl.uniform1f(u.u_scan, enabled.crt ? state.scan : 0);
-  gl.uniform1f(u.u_track, enabled.crt ? state.track : 0);
-  gl.uniform1f(u.u_wobble, enabled.crt ? state.wobble : 0);
-  gl.uniform1f(u.u_noise, enabled.grain ? state.noise : 0);
-  gl.uniform1f(u.u_vig, enabled.grain ? state.vig : 0);
-  gl.uniform1f(u.u_temp, enabled.grade ? state.temp : 0);
-  gl.uniform1f(u.u_fade, enabled.grade ? state.fade : 0);
-  gl.uniform1f(u.u_split, enabled.grade ? state.split : 0);
-  gl.uniform1f(u.u_sat, enabled.grade ? state.sat : 1);
-  gl.uniform1f(u.u_con, enabled.grade ? state.con : 1);
-  gl.uniform1f(u.u_leak, enabled.leak ? state.leak : 0);
-  const textOn = textState.str.trim() !== "";
+  gl.uniform1f(u.u_pixel, en.pixel ? st.pixel : 0);
+  gl.uniform1i(u.u_dmode, en.dither ? st.dmode : 0);
+  gl.uniform1f(u.u_dscale, st.dscale);
+  gl.uniform1f(u.u_levels, st.levels);
+  gl.uniform1f(u.u_curve, en.crt ? st.curve : 0);
+  gl.uniform1f(u.u_scan, en.crt ? st.scan : 0);
+  gl.uniform1f(u.u_track, en.crt ? st.track : 0);
+  gl.uniform1f(u.u_wobble, en.crt ? st.wobble : 0);
+  gl.uniform1f(u.u_noise, en.grain ? st.noise : 0);
+  gl.uniform1f(u.u_vig, en.grain ? st.vig : 0);
+  gl.uniform1f(u.u_temp, en.grade ? st.temp : 0);
+  gl.uniform1f(u.u_fade, en.grade ? st.fade : 0);
+  gl.uniform1f(u.u_split, en.grade ? st.split : 0);
+  gl.uniform1f(u.u_sat, en.grade ? st.sat : 1);
+  gl.uniform1f(u.u_con, en.grade ? st.con : 1);
+  gl.uniform1f(u.u_leak, en.leak ? st.leak : 0);
+  const textOn = ov ? ov.textOn : textState.str.trim() !== "";
+  const textTexUse = ov ? (ov.textTex || clearTex) : (textOn ? textTex : clearTex);
   gl.activeTexture(gl.TEXTURE2);
-  gl.bindTexture(gl.TEXTURE_2D, textOn ? textTex : clearTex);
+  gl.bindTexture(gl.TEXTURE_2D, textTexUse);
   gl.uniform1i(u.u_text, 2);
   gl.uniform1f(u.u_textOn, textOn ? 1 : 0);
   gl.drawArrays(gl.TRIANGLES, 0, 3);
@@ -2198,6 +2282,7 @@ function frame() {
       zoomA: s.zoomA,
       zoomB: s.zoomB,
     };
+    seqOverride = overrideFor(s.a, s.b, s.t);
     dirty = true;
     if (el >= total + 300 && seqPlaying.onend) {
       const f = seqPlaying.onend;
@@ -2221,6 +2306,7 @@ function frame() {
         zoomA: s.zoomA,
         zoomB: s.zoomB,
       };
+      seqOverride = overrideFor(s.a, s.b, s.t);
       dirty = true;
     }
   }

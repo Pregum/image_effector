@@ -331,6 +331,96 @@ async function getWorkImage(req, env, url, id, kind) {
   });
 }
 
+// --- 共有（作品ごと・24時間で自動失効）---
+const SHARE_TTL_MS = 24 * 60 * 60 * 1000;
+
+async function shareWork(req, env, id) {
+  if (!authed(req, env)) return json({ error: "unauthorized" }, 401);
+  let body = {};
+  try { body = await req.json(); } catch { /* 省略時はONとみなす */ }
+  const until = body?.on === false ? 0 : Date.now() + SHARE_TTL_MS;
+  const r = await env.DB.prepare("UPDATE works SET shared = ? WHERE id = ?").bind(until, id).run();
+  if (!r.meta?.changes) return json({ error: "not found" }, 404);
+  return json({ shared_until: until });
+}
+
+// 共有中の作品のレシピ等（エディタで開くために使う。共有期限内のみ公開）
+async function sharedMeta(env, id) {
+  const row = await env.DB.prepare(
+    "SELECT recipe, width, height, prompt, shared FROM works WHERE id = ?"
+  ).bind(id).first();
+  const until = Number(row?.shared) || 0;
+  if (!row || until <= Date.now()) return null;
+  let recipe = null;
+  try { recipe = JSON.parse(row.recipe); } catch {}
+  return {
+    recipe,
+    width: row.width,
+    height: row.height,
+    prompt: row.prompt,
+    shared_until: until,
+  };
+}
+
+const esc = (s) =>
+  String(s ?? "").replace(/[&<>"']/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+function sharePage(id, meta, origin) {
+  const noStore = { "content-type": "text/html; charset=utf-8", "cache-control": "private, no-store" };
+  if (!meta) {
+    return new Response(
+      `<!doctype html><meta charset="utf-8"><title>共有リンクの期限切れ — NOIZ LAB</title>` +
+      `<meta name="viewport" content="width=device-width,initial-scale=1">` +
+      `<style>body{background:#0b0d0c;color:#e8e6df;font-family:system-ui,sans-serif;display:grid;place-items:center;min-height:100vh;margin:0;padding:24px;text-align:center;line-height:1.9}a{color:#c8ff00}</style>` +
+      `<div><h1 style="font-size:20px">この共有リンクは期限切れです</h1>` +
+      `<p style="color:#8b917e;font-size:14px">共有リンクは作成から約1日で自動的に無効になります。<br>` +
+      `もう一度見るには、共有した人にリンクを作り直してもらってください。</p>` +
+      `<p><a href="${esc(origin)}/">NOIZ LAB を開く</a></p></div>`,
+      { status: 410, headers: noStore }
+    );
+  }
+  // captionはLLaVA生成の内部データなので公開ページには出さない
+  const title = meta.prompt || "NOIZ LAB の作品";
+  const img = `${origin}/api/works/${id}/thumb`;
+  const remainH = Math.max(1, Math.round((meta.shared_until - Date.now()) / 3600000));
+  return new Response(
+    `<!doctype html><html lang="ja"><head><meta charset="utf-8">` +
+    `<meta name="viewport" content="width=device-width,initial-scale=1">` +
+    `<title>${esc(title)} — NOIZ LAB</title>` +
+    `<meta property="og:title" content="${esc(title)}">` +
+    `<meta property="og:description" content="NOIZ LAB で作った画像。リンクは約1日で失効します。">` +
+    `<meta property="og:image" content="${esc(img)}">` +
+    `<meta property="og:type" content="website">` +
+    `<meta name="twitter:card" content="summary_large_image">` +
+    `<link rel="preconnect" href="https://fonts.googleapis.com">` +
+    `<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DotGothic16&family=Zen+Kaku+Gothic+New:wght@400;500&display=swap">` +
+    `<style>` +
+    `*{box-sizing:border-box;margin:0}` +
+    `body{background:radial-gradient(900px 500px at 70% -10%,#1a2012,transparent 60%),#0b0d0c;color:#e8e6df;` +
+    `font-family:"Zen Kaku Gothic New",system-ui,sans-serif;line-height:1.85;min-height:100vh;padding:32px 20px 64px}` +
+    `main{max-width:760px;margin:0 auto}` +
+    `.logo{font-family:"DotGothic16",monospace;font-size:20px;letter-spacing:2px;color:#c8ff00;text-decoration:none}` +
+    `h1{font-size:19px;font-weight:500;margin:22px 0 14px;line-height:1.6}` +
+    `img{width:100%;height:auto;display:block;border:1px solid #3d4433;background:#000;` +
+    `box-shadow:0 0 40px rgba(200,255,0,.07),0 24px 60px rgba(0,0,0,.55)}` +
+    `.meta{display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin-top:18px;font-size:12.5px;color:#8b917e}` +
+    `.btn{font-family:"DotGothic16",monospace;font-size:13px;letter-spacing:1px;background:#c8ff00;color:#0b0d0c;` +
+    `padding:9px 18px;text-decoration:none;display:inline-block;` +
+    `clip-path:polygon(0 0,calc(100% - 8px) 0,100% 8px,100% 100%,8px 100%,0 calc(100% - 8px))}` +
+    `.expiry{border:1px dashed #3d4433;padding:3px 10px;font-size:11.5px}` +
+    `</style></head><body><main>` +
+    `<a class="logo" href="${esc(origin)}/">NOIZ LAB</a>` +
+    `<h1>${esc(title)}</h1>` +
+    `<img src="${esc(img)}" alt="${esc(title)}">` +
+    `<div class="meta">` +
+    `<a class="btn" href="${esc(origin)}/#w=${esc(id)}">この作品をエディタで開く</a>` +
+    `<span class="expiry">この共有リンクは残り約${remainH}時間で失効します</span>` +
+    `</div></main></body></html>`,
+    { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "public, max-age=300" } }
+  );
+}
+
 async function deleteWork(req, env, id) {
   if (!authed(req, env)) return json({ error: "unauthorized" }, 401);
   await env.IMAGES.delete([`works/${id}/source`, `works/${id}/thumb`]);
@@ -560,12 +650,23 @@ export default {
     if (pathname === "/api/works" && req.method === "POST") return saveWork(req, env, ctx);
     if (pathname === "/api/works" && req.method === "GET") return listWorks(req, env);
 
-    const m = pathname.match(/^\/api\/works\/([0-9a-f-]{36})(?:\/(source|thumb|embed))?$/);
+    // 共有ページ（作品ごと・24時間で失効）
+    const sm = pathname.match(/^\/w\/([0-9a-f-]{36})$/);
+    if (sm && req.method === "GET") {
+      return sharePage(sm[1], await sharedMeta(env, sm[1]), url.origin);
+    }
+
+    const m = pathname.match(/^\/api\/works\/([0-9a-f-]{36})(?:\/(source|thumb|embed|share|meta))?$/);
     if (m) {
       if (req.method === "GET" && (m[2] === "source" || m[2] === "thumb")) {
         return getWorkImage(req, env, url, m[1], m[2]);
       }
       if (req.method === "POST" && m[2] === "embed") return embedRoute(req, env, m[1]);
+      if (req.method === "POST" && m[2] === "share") return shareWork(req, env, m[1]);
+      if (req.method === "GET" && m[2] === "meta") {
+        const meta = await sharedMeta(env, m[1]);
+        return meta ? json(meta) : json({ error: "not shared" }, 404);
+      }
       if (req.method === "DELETE" && !m[2]) return deleteWork(req, env, m[1]);
     }
 

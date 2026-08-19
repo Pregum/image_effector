@@ -2467,9 +2467,31 @@ async function refreshGallery() {
       const dt = new Date(w.created_at);
       const label = `${dt.getMonth() + 1}/${dt.getDate()} ` +
         `${String(dt.getHours()).padStart(2, "0")}:${String(dt.getMinutes()).padStart(2, "0")}`;
+      const sharedNow = (w.shared_until || 0) > Date.now();
       el.innerHTML =
         `<img loading="lazy" src="${workImgUrl(w, "thumb")}" alt="" />` +
-        `<div class="work-meta"><span>${label}</span><button class="work-del" title="削除">✕</button></div>`;
+        `<div class="work-meta"><span>${label}</span>` +
+        `<button class="work-share${sharedNow ? " on" : ""}" title="共有リンクを作る（約1日で失効）">🔗</button>` +
+        `<button class="work-del" title="削除">✕</button></div>`;
+      el.querySelector(".work-share").addEventListener("click", async (e) => {
+        e.stopPropagation();
+        try {
+          const r = await fetch(`/api/works/${w.id}/share`, {
+            method: "POST",
+            headers: { ...keyHeaders(), "content-type": "application/json" },
+            body: JSON.stringify({ on: true }),
+          });
+          if (!r.ok) throw new Error(String(r.status));
+          const { shared_until } = await r.json();
+          w.shared_until = shared_until;
+          const url = `${location.origin}/w/${w.id}`;
+          try { await navigator.clipboard.writeText(url); } catch {}
+          e.target.classList.add("on");
+          setGalleryNote(`共有リンクをコピーしました（約1日で失効）: ${url}`);
+        } catch {
+          setGalleryNote("共有リンクの作成に失敗しました。", true);
+        }
+      });
       const imgEl = el.querySelector("img");
       imgEl.addEventListener("click", () => loadWork(w));
       // 署名の期限切れ（長時間開きっぱなし）なら一度だけ取り直す
@@ -3551,6 +3573,34 @@ if (recipeHashMatch && recipeHashMatch[1].length < 4000) {
     applyRecipeObject(JSON.parse(b64urlDecode(recipeHashMatch[1])));
   } catch { /* 不正なレシピURLは無視 */ }
 }
+// 共有リンク（/#w=<id>）から作品を開く。共有期限内のみ読める
+const sharedHashMatch = location.hash.match(/w=([0-9a-f-]{36})/);
+if (sharedHashMatch) {
+  (async () => {
+    const id = sharedHashMatch[1];
+    try {
+      const res = await fetch(`/api/works/${id}/meta`);
+      if (!res.ok) {
+        setNote("この共有リンクは期限切れです（共有は約1日で失効します）。", true);
+        return;
+      }
+      const meta = await res.json();
+      if (meta.recipe) {
+        applyRecipeObject({
+          e: meta.recipe.enabled, s: meta.recipe.state,
+          seed: meta.recipe.seed, t: meta.recipe.text,
+        });
+      }
+      const img = await fetch(`/api/works/${id}/source`);
+      if (!img.ok) throw new Error(String(img.status));
+      await loadBlob(await img.blob());
+      setNote("共有された作品を読み込みました。自由に加工できます。");
+    } catch {
+      setNote("共有作品の読み込みに失敗しました。", true);
+    }
+  })();
+}
+
 // PWA: オフライン時のフォールバック用Service Worker（ネットワーク優先）
 if ("serviceWorker" in navigator) {
   navigator.serviceWorker.register("/sw.js").catch(() => { /* 非対応環境は無視 */ });

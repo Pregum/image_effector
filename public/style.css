@@ -496,6 +496,13 @@ input[type="range"]::-moz-range-thumb {
   cursor: pointer; padding: 0 2px;
 }
 .work-del:hover { color: var(--magenta); }
+.work-share {
+  background: none; border: none;
+  color: var(--ink-dim); font-size: 12px;
+  cursor: pointer; padding: 0 2px; opacity: 0.55;
+}
+.work-share:hover { opacity: 1; }
+.work-share.on { opacity: 1; filter: drop-shadow(0 0 5px var(--acid)); }
 
 .gallery-grid[hidden], #graph-wrap[hidden] { display: none !important; }
 

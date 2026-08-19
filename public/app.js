@@ -110,6 +110,8 @@ uniform float u_dscale;
 uniform float u_levels;
 uniform float u_curve;
 uniform float u_scan;
+uniform float u_track;  // VHSトラッキングノイズ 0..1
+uniform float u_wobble; // 走査線ゆらぎ 0..1
 uniform float u_noise;
 uniform float u_vig;
 uniform float u_temp;   // 色温度 -1..1
@@ -170,6 +172,19 @@ void main() {
              * step(0.72, hash(line * 3.1 + t24));
   }
 
+  // VHSトラッキング（ゆっくり流れるノイズ帯で横ずれ）
+  float trackM = 0.0;
+  if (u_track > 0.0) {
+    float bandPos = 1.0 - fract(u_time * 0.09);
+    trackM = exp(-abs(uv.y - bandPos) * 45.0);
+    puv.x += (hash(floor(puv.y * u_res.y) * 1.7 + floor(u_time * 24.0)) - 0.5) * trackM * u_track * 0.2;
+  }
+  // 走査線ゆらぎ（行ごとの横揺れ）
+  if (u_wobble > 0.0) {
+    puv.x += sin(puv.y * 7.0 + u_time * 2.2) * u_wobble * 0.006
+           + sin(puv.y * 29.0 - u_time * 3.7) * u_wobble * 0.0035;
+  }
+
   // 色収差
   float sh = (u_rgb + extraShift) / u_res.x;
   vec3 col;
@@ -201,6 +216,20 @@ void main() {
     float d = length(p - center);
     float m = 1.0 - smoothstep(rad - 0.8, rad + 0.8, d);
     col = mix(vec3(0.955, 0.945, 0.915), sc * 0.82, m);
+  } else if (u_dmode == 3) {
+    // アスキーアート化（明度→9段階のグリフ、色は元画像由来）
+    float cell2 = max(u_dscale, 1.0) * 8.0;
+    vec2 cid = floor(gl_FragCoord.xy / cell2);
+    vec2 cuv2 = clamp((cid + 0.5) * cell2 / u_res, 0.0, 1.0);
+    vec3 sc2 = texture(u_base, cuv2).rgb;
+    float lum3 = dot(sc2, vec3(0.299, 0.587, 0.114));
+    int gi = int(clamp(lum3, 0.0, 0.999) * 9.0);
+    int FONT[9] = int[9](0, 131072, 131200, 14336, 459200, 145536, 22511061, 11512810, 15728622);
+    vec2 gp = fract(gl_FragCoord.xy / cell2);
+    ivec2 gxy = ivec2(clamp(gp, vec2(0.0), vec2(0.999)) * 5.0);
+    int bit = (FONT[gi] >> ((4 - gxy.y) * 5 + gxy.x)) & 1;
+    vec3 ink = clamp(sc2 * 1.5 + 0.12, 0.0, 1.0);
+    col = bit == 1 ? ink : vec3(0.015, 0.03, 0.02);
   }
 
   // カラーグレーディング（ハーフトーンがcolを再構成するためディザ類の後段に置く）
@@ -222,6 +251,11 @@ void main() {
     float streak = exp(-pow((uv.y - lp.y - 0.28) * 2.6, 2.0)) * 0.35;
     vec3 lc = mix(vec3(1.0, 0.45, 0.22), vec3(1.0, 0.30, 0.55), hash(9.1));
     col += (bloomL * 0.9 + streak) * u_leak * lc;
+  }
+
+  // トラッキング帯のスノーノイズ
+  if (trackM > 0.0) {
+    col = mix(col, vec3(0.72 + 0.28 * hash2(uv * u_res + floor(u_time * 20.0))), trackM * u_track * 0.6);
   }
 
   // 文字入れ（グリッチ・ぼかしの影響を受けず、CRT湾曲・走査線・粒子には馴染む位置）
@@ -339,7 +373,7 @@ const state = {
   halation: 0.8, halThresh: 0.55,
   pixel: 10,
   dmode: 1, dscale: 3, levels: 4,
-  curve: 0.4, scan: 0.5,
+  curve: 0.4, scan: 0.5, track: 0, wobble: 0,
   noise: 0.3, vig: 0.4,
   temp: 0.25, fade: 0.35, split: 0.5, sat: 1.1, con: 1.1,
   leak: 0.7,
@@ -386,7 +420,7 @@ const MODULES = [
   { id: "pixel", name: "PIXELATE", jp: "モザイク",
     params: [{ key: "pixel", label: "サイズ", min: 2, max: 64, step: 1 }] },
   { id: "dither", name: "DITHER", jp: "ディザ / 網点",
-    seg: { key: "dmode", options: ["ベイヤー", "ハーフトーン"], offset: 1 },
+    seg: { key: "dmode", options: ["ベイヤー", "ハーフトーン", "アスキー"], offset: 1 },
     params: [
       { key: "dscale", label: "スケール", min: 1, max: 20, step: 1 },
       { key: "levels", label: "階調", min: 2, max: 8, step: 1 },
@@ -395,6 +429,8 @@ const MODULES = [
     params: [
       { key: "curve", label: "湾曲", min: 0, max: 1, step: 0.01 },
       { key: "scan", label: "走査線", min: 0, max: 1, step: 0.01 },
+      { key: "track", label: "トラッキング", min: 0, max: 1, step: 0.01 },
+      { key: "wobble", label: "ゆらぎ", min: 0, max: 1, step: 0.01 },
     ] },
   { id: "grain", name: "GRAIN", jp: "粒子・減光",
     params: [
@@ -408,7 +444,7 @@ const PRESETS = [
   { name: "Y2K", on: { glitch: 1, rgb: 1, crt: 1, grain: 1 },
     set: { glitch: 0.55, rgb: 8, curve: 0, scan: 0.35, noise: 0.15, vig: 0.15 } },
   { name: "VHS", on: { rgb: 1, crt: 1, grain: 1, blur: 1 },
-    set: { rgb: 4, curve: 0.5, scan: 0.65, noise: 0.35, vig: 0.5, blur: 1.5 } },
+    set: { rgb: 4, curve: 0.5, scan: 0.65, track: 0.55, wobble: 0.35, noise: 0.35, vig: 0.5, blur: 1.5 } },
   { name: "DREAM", on: { halation: 1, blur: 1, grain: 1 },
     set: { halation: 1.1, halThresh: 0.5, blur: 3, noise: 0.12, vig: 0.35 } },
   { name: "PRINT", on: { dither: 1, grain: 1 },
@@ -1866,6 +1902,8 @@ function render(time) {
   gl.uniform1f(u.u_levels, state.levels);
   gl.uniform1f(u.u_curve, enabled.crt ? state.curve : 0);
   gl.uniform1f(u.u_scan, enabled.crt ? state.scan : 0);
+  gl.uniform1f(u.u_track, enabled.crt ? state.track : 0);
+  gl.uniform1f(u.u_wobble, enabled.crt ? state.wobble : 0);
   gl.uniform1f(u.u_noise, enabled.grain ? state.noise : 0);
   gl.uniform1f(u.u_vig, enabled.grain ? state.vig : 0);
   gl.uniform1f(u.u_temp, enabled.grade ? state.temp : 0);
@@ -1922,7 +1960,9 @@ function frame() {
     }
   }
   const needsAnim = animate && originalData &&
-    ((enabled.glitch && state.glitch > 0) || (enabled.grain && state.noise > 0));
+    ((enabled.glitch && state.glitch > 0) ||
+     (enabled.grain && state.noise > 0) ||
+     (enabled.crt && (state.track > 0 || state.wobble > 0)));
   if (dirty || needsAnim) {
     render(animate ? performance.now() / 1000 : frozenTime);
     dirty = false;

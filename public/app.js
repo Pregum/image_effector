@@ -1231,6 +1231,52 @@ document.getElementById("bpm-apply").addEventListener("click", () => {
     `（表示${seqState.hold.toFixed(2)}s + 切替${seqState.trans.toFixed(1)}s）${msg}`;
 });
 
+// ---- BPM自動検出（エネルギーフラックスの自己相関。適用は手動のまま）
+function detectBPM(buffer) {
+  const sr = buffer.sampleRate;
+  const data = buffer.getChannelData(0);
+  const hop = 512;
+  const n = Math.floor(data.length / hop);
+  if (n < 64) return 0;
+  const energy = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    let s = 0;
+    const off = i * hop;
+    for (let j = 0; j < hop; j++) s += data[off + j] * data[off + j];
+    energy[i] = s;
+  }
+  const flux = new Float32Array(n);
+  for (let i = 1; i < n; i++) flux[i] = Math.max(0, energy[i] - energy[i - 1]);
+  const fps = sr / hop;
+  const score = (bpm) => {
+    const lag = (fps * 60) / bpm;
+    const l0 = Math.floor(lag);
+    const fr = lag - l0;
+    let s = 0, c = 0;
+    for (let i = 0; i + l0 + 1 < n; i++) {
+      s += flux[i] * (flux[i + l0] * (1 - fr) + flux[i + l0 + 1] * fr);
+      c++;
+    }
+    return c ? s / c : 0;
+  };
+  let bestBpm = 0;
+  let best = 0;
+  for (let bpm = 60; bpm <= 200; bpm += 0.5) {
+    const s = score(bpm);
+    if (s > best) { best = s; bestBpm = bpm; }
+  }
+  // 半分/2倍テンポの曖昧さは80-160のレンジを優先して解決する
+  if (bestBpm && (bestBpm < 80 || bestBpm > 160)) {
+    for (const cand of [bestBpm / 2, bestBpm * 2]) {
+      if (cand >= 80 && cand <= 160 && score(cand) > best * 0.9) {
+        bestBpm = cand;
+        break;
+      }
+    }
+  }
+  return Math.round(bestBpm);
+}
+
 // ---- BGM（録画時に音声トラックとして合成）
 let bgmBuffer = null;
 const bgmInput = document.getElementById("bgm-input");
@@ -1244,8 +1290,11 @@ bgmInput.addEventListener("change", async () => {
     const ac = new (window.AudioContext || window.webkitAudioContext)();
     bgmBuffer = await ac.decodeAudioData(await f.arrayBuffer());
     ac.close();
+    const bpm = detectBPM(bgmBuffer);
     bgmNameEl.hidden = false;
-    bgmNameEl.textContent = `♫ ${f.name}（${bgmBuffer.duration.toFixed(1)}s）`;
+    bgmNameEl.textContent =
+      `♫ ${f.name}（${bgmBuffer.duration.toFixed(1)}s${bpm ? ` / 推定${bpm}BPM` : ""}）`;
+    if (bpm) document.getElementById("bpm-input").value = bpm;
     document.getElementById("bgm-clear").disabled = false;
   } catch {
     transNote.textContent = "BGMを読み込めませんでした（mp3/wav/m4a等）。";

@@ -48,6 +48,47 @@ void main() {
   o = vec4(c * m, 1.0);
 }`;
 
+const FRAG_TRANS = `#version 300 es
+precision highp float;
+in vec2 v_uv; out vec4 o;
+uniform sampler2D u_a;
+uniform sampler2D u_b;
+uniform float u_t;     // 0=A → 1=B
+uniform int u_mode;    // 0:fade 1:wipe 2:dissolve 3:glitch
+uniform vec2 u_res;
+uniform float u_seed2;
+float th(float n) { return fract(sin(n * 127.1 + u_seed2 * 311.7) * 43758.5453); }
+float th2(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7)) + u_seed2 * 17.0) * 43758.5453); }
+void main() {
+  vec2 uv = v_uv;
+  float t = clamp(u_t, 0.0, 1.0);
+  vec4 A = texture(u_a, uv);
+  vec4 B = texture(u_b, uv);
+  if (u_mode == 0) {
+    o = mix(A, B, smoothstep(0.0, 1.0, t));
+  } else if (u_mode == 1) {
+    float e = smoothstep(-0.06, 0.06, uv.x - (t * 1.12 - 0.06));
+    o = mix(B, A, e);
+  } else if (u_mode == 2) {
+    float r = th2(floor(uv * u_res / 16.0));
+    o = mix(A, B, step(r, t));
+  } else {
+    float band = floor(uv.y * 36.0);
+    float jit = th(band + floor(t * 24.0)) - 0.5;
+    float p = sin(t * 3.14159);
+    float edge = t * 1.2 - 0.1 + jit * 0.18 * p;
+    float d = abs(uv.x - edge);
+    float amt = exp(-d * 14.0) * p;
+    vec2 duv = clamp(uv + vec2(jit * amt * 0.35, 0.0), 0.0, 1.0);
+    float m = step(duv.x, edge);
+    o = mix(texture(u_a, duv), texture(u_b, duv), m);
+    vec2 ruv = clamp(duv + vec2(amt * 0.03, 0.0), 0.0, 1.0);
+    vec2 buv = clamp(duv - vec2(amt * 0.03, 0.0), 0.0, 1.0);
+    o.r = mix(texture(u_a, ruv), texture(u_b, ruv), m).r;
+    o.b = mix(texture(u_a, buv), texture(u_b, buv), m).b;
+  }
+}`;
+
 const FRAG_FINAL = `#version 300 es
 precision highp float;
 in vec2 v_uv; out vec4 o;
@@ -242,6 +283,7 @@ function program(fragSrc) {
 const blurP = program(FRAG_BLUR);
 const brightP = program(FRAG_BRIGHT);
 const finalP = program(FRAG_FINAL);
+const transP = program(FRAG_TRANS);
 
 function makeTex(w, h) {
   const t = gl.createTexture();
@@ -271,15 +313,16 @@ const clearTex = makeTex();
 gl.bindTexture(gl.TEXTURE_2D, clearTex);
 gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([0, 0, 0, 0]));
 
-let fboA = null, fboB = null, fboC = null, fboD = null;
+let fboA = null, fboB = null, fboC = null, fboD = null, fboT = null;
 let W = 0, H = 0;
 
 function allocFbos(w, h) {
-  for (const f of [fboA, fboB, fboC, fboD]) {
+  for (const f of [fboA, fboB, fboC, fboD, fboT]) {
     if (f) { gl.deleteTexture(f.tex); gl.deleteFramebuffer(f.fbo); }
   }
   fboA = makeFbo(w, h); fboB = makeFbo(w, h);
   fboC = makeFbo(w, h); fboD = makeFbo(w, h);
+  fboT = makeFbo(w, h);
 }
 
 // ---------------------------------------------------------------- state / UI
@@ -708,6 +751,7 @@ function setSourceImage(imgLike, w, h) {
   allocFbos(W, H);
   compositeSource();
   updateTextTexture();
+  uploadTransB(); // 画像Bは新しい解像度に合わせて再クロップ
   document.getElementById("status-res").textContent = `${W} × ${H} px`;
   document.getElementById("drop-hint").style.display = "none";
   requestAnimationFrame(updateCropGuide);
@@ -964,6 +1008,120 @@ document.getElementById("btn-save").addEventListener("click", () => {
     setTimeout(() => URL.revokeObjectURL(a.href), 5000);
   }, "image/png");
 });
+
+// ---------------------------------------------------------------- トランジション動画
+
+const texB = makeTex();
+let transBBitmap = null;
+let transBReady = false;
+let transT = null;      // 再生中の遷移位置 0..1（null=通常表示）
+let transPlaying = null;
+const transState = { mode: 0, duration: 2.5 };
+const transBtn = document.getElementById("btn-transition");
+const transNote = document.getElementById("trans-note");
+
+function uploadTransB() {
+  if (!transBBitmap || !W || !H) return;
+  // 画像Aの解像度にカバークロップして揃える
+  const c = document.createElement("canvas");
+  c.width = W;
+  c.height = H;
+  const ctx = c.getContext("2d");
+  const s = Math.max(W / transBBitmap.width, H / transBBitmap.height);
+  const dw = transBBitmap.width * s;
+  const dh = transBBitmap.height * s;
+  ctx.drawImage(transBBitmap, (W - dw) / 2, (H - dh) / 2, dw, dh);
+  gl.bindTexture(gl.TEXTURE_2D, texB);
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, c);
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+}
+
+function setTransB(bitmap) {
+  transBBitmap = bitmap;
+  uploadTransB();
+  transBReady = true;
+  transBtn.disabled = false;
+  transNote.textContent = "画像Bを設定しました。▶で A→B の動画を書き出します。";
+}
+
+const transbInput = document.getElementById("transb-input");
+document.getElementById("transb-open").addEventListener("click", () => transbInput.click());
+transbInput.addEventListener("change", async () => {
+  const f = transbInput.files[0];
+  transbInput.value = "";
+  if (!f) return;
+  try {
+    setTransB(await createImageBitmap(f));
+  } catch {
+    transNote.textContent = "画像Bを読み込めませんでした。";
+  }
+});
+document.getElementById("transb-current").addEventListener("click", async () => {
+  if (!originalData) return;
+  setTransB(await createImageBitmap(originalData));
+});
+
+document.getElementById("trans-mode-seg").querySelectorAll("button").forEach((b, i) => {
+  b.addEventListener("click", () => {
+    transState.mode = i;
+    document.getElementById("trans-mode-seg").querySelectorAll("button")
+      .forEach((v) => v.classList.remove("sel"));
+    b.classList.add("sel");
+  });
+});
+document.getElementById("trans-duration").addEventListener("input", (e) => {
+  transState.duration = +e.target.value;
+  document.getElementById("trans-duration-val").textContent = `${transState.duration.toFixed(1)}s`;
+});
+
+async function exportTransition() {
+  if (!transBReady || !originalData || transPlaying) return;
+  transBtn.disabled = true;
+  transBtn.textContent = "録画中…";
+  try {
+    const stream = canvas.captureStream(30);
+    const mime = ["video/webm;codecs=vp9", "video/webm;codecs=vp8", "video/webm", "video/mp4"]
+      .find((m) => window.MediaRecorder && MediaRecorder.isTypeSupported(m));
+    if (!mime) throw new Error("MediaRecorder unsupported");
+    const rec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 8_000_000 });
+    const chunks = [];
+    rec.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
+    const stopped = new Promise((res) => (rec.onstop = res));
+    rec.start(200);
+    // 前後0.6秒ずつホールドし、間を遷移させながらリアルタイム録画する
+    transPlaying = { start: performance.now(), hold: 600, durMs: transState.duration * 1000 };
+    markDirty();
+    // ウィンドウが隠れるとrAFが止まり進行しないため、タイムアウトで中断する
+    const totalMs = 600 + transState.duration * 1000 + 600;
+    const finished = await Promise.race([
+      new Promise((res) => (transPlaying.onend = () => res(true))),
+      new Promise((res) => setTimeout(() => res(false), totalMs + 4000)),
+    ]);
+    rec.stop();
+    await stopped;
+    if (!finished) {
+      transNote.textContent = "書き出しがタイムアウトしました。録画中はこのウィンドウを前面に表示したままにしてください。";
+      return;
+    }
+    const blob = new Blob(chunks, { type: mime.split(";")[0] });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `noizlab_transition_${Date.now()}.${mime.includes("mp4") ? "mp4" : "webm"}`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    transNote.textContent = "動画を保存しました。Xに投稿する場合はMP4/GIF変換が必要です。";
+  } catch {
+    transNote.textContent = "動画の書き出しに失敗しました（Safariは非対応の場合があります）。";
+  } finally {
+    transPlaying = null;
+    transT = null;
+    markDirty();
+    transBtn.disabled = !transBReady;
+    transBtn.textContent = "▶ WebM書き出し";
+  }
+}
+transBtn.addEventListener("click", exportTransition);
 
 document.getElementById("btn-share").addEventListener("click", () => {
   const text = "NOIZ LAB で画像にエフェクトをかけた🎛️";
@@ -1402,6 +1560,26 @@ function render(time) {
   if (!originalData) return;
 
   let base = srcTex;
+
+  // トランジション再生中は A→B を合成したものをソースとして流す
+  if (transT !== null && transBReady) {
+    gl.useProgram(transP.prog);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fboT.fbo);
+    gl.viewport(0, 0, W, H);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, srcTex);
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, texB);
+    const tu = transP.u;
+    gl.uniform1i(tu.u_a, 0);
+    gl.uniform1i(tu.u_b, 1);
+    gl.uniform1f(tu.u_t, transT);
+    gl.uniform1i(tu.u_mode, transState.mode);
+    gl.uniform2f(tu.u_res, W, H);
+    gl.uniform1f(tu.u_seed2, seed);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    base = fboT.tex;
+  }
   const blurR = enabled.blur ? state.blur : 0;
   if (blurR > 0.25) {
     pass(blurP, base, fboA, (u) => {
@@ -1466,6 +1644,17 @@ function render(time) {
 }
 
 function frame() {
+  if (transPlaying) {
+    const el = performance.now() - transPlaying.start;
+    const total = transPlaying.hold + transPlaying.durMs + transPlaying.hold;
+    transT = Math.min(1, Math.max(0, (el - transPlaying.hold) / transPlaying.durMs));
+    dirty = true;
+    if (el >= total && transPlaying.onend) {
+      const f = transPlaying.onend;
+      transPlaying.onend = null;
+      f();
+    }
+  }
   const needsAnim = animate && originalData &&
     ((enabled.glitch && state.glitch > 0) || (enabled.grain && state.noise > 0));
   if (dirty || needsAnim) {

@@ -3601,6 +3601,46 @@ if (sharedHashMatch) {
   })();
 }
 
+// ---------------------------------------------------------------- 構成に応じたUIの出し分け
+// バックエンドが無い構成（静的ホスティングのみ）でも壊れないように、
+// 使えない機能のUIは隠す。取得できなければ「どちらも無し」とみなす。
+const FEATURES_OFF = { ai: false, gallery: false };
+
+async function loadFeatures() {
+  try {
+    const res = await fetch("/api/config", { cache: "no-store" });
+    if (!res.ok) return FEATURES_OFF;
+    if (!(res.headers.get("content-type") || "").includes("application/json")) {
+      return FEATURES_OFF; // 静的ホスティングのHTML 404が返るケース
+    }
+    const c = await res.json();
+    return { ai: !!c.ai, gallery: !!c.gallery };
+  } catch {
+    return FEATURES_OFF;
+  }
+}
+
+loadFeatures().then((f) => {
+  if (!f.ai) {
+    document.querySelector(".ai-box")?.setAttribute("hidden", "");
+  }
+  if (!f.gallery) {
+    for (const id of ["btn-gallery", "btn-store"]) {
+      document.getElementById(id)?.setAttribute("hidden", "");
+    }
+    galleryOverlay.hidden = true;
+  }
+  if (!f.ai && !f.gallery) {
+    const note = document.querySelector(".panel-footer");
+    if (note) {
+      note.insertAdjacentHTML(
+        "afterbegin",
+        '<p style="margin-bottom:6px">この構成ではAI生成とギャラリーは無効です。エフェクト・動画・GIFはそのまま使えます。</p>'
+      );
+    }
+  }
+});
+
 // PWA: オフライン時のフォールバック用Service Worker（ネットワーク優先）
 if ("serviceWorker" in navigator) {
   navigator.serviceWorker.register("/sw.js").catch(() => { /* 非対応環境は無視 */ });

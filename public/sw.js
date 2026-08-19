@@ -17,6 +17,7 @@ self.addEventListener("fetch", (e) => {
   const url = new URL(e.request.url);
   // 同一オリジンのGETかつシェル資産のみ対象。/api/ は一切触らない
   if (e.request.method !== "GET" || url.origin !== self.location.origin) return;
+  // APIは一切キャッシュしない（構成情報や作品データが古いまま配られないように）
   if (url.pathname.startsWith("/api/")) return;
   e.respondWith(
     fetch(e.request)

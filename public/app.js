@@ -1323,11 +1323,48 @@ async function exportSequence() {
 }
 transBtn.addEventListener("click", exportSequence);
 
+// ---- レシピURL共有（現在の設定をURLハッシュにシリアライズ）
+const b64urlEncode = (str) =>
+  btoa(String.fromCharCode(...new TextEncoder().encode(str)))
+    .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+const b64urlDecode = (b64) => {
+  const bin = atob(b64.replace(/-/g, "+").replace(/_/g, "/"));
+  return new TextDecoder().decode(Uint8Array.from(bin, (c) => c.charCodeAt(0)));
+};
+
+function buildRecipeUrl() {
+  const r3 = (v) => (typeof v === "number" ? Math.round(v * 1000) / 1000 : v);
+  const s = {};
+  for (const [k, v] of Object.entries(state)) s[k] = r3(v);
+  const payload = { v: 1, e: { ...enabled }, s, seed: r3(seed), t: { ...textState } };
+  return `${location.origin}/#r=${b64urlEncode(JSON.stringify(payload))}`;
+}
+
+function applyRecipeObject(r) {
+  Object.assign(state, DEFAULTS, r?.s && typeof r.s === "object" ? r.s : {});
+  for (const k of Object.keys(enabled)) enabled[k] = !!r?.e?.[k];
+  seed = typeof r?.seed === "number" ? r.seed : 1;
+  syncUI();
+  applyTextRecipe(r?.t);
+  scheduleSort();
+  markDirty();
+}
+
+document.getElementById("btn-recipe-url").addEventListener("click", async () => {
+  const b = document.getElementById("btn-recipe-url");
+  try {
+    await navigator.clipboard.writeText(buildRecipeUrl());
+    b.textContent = "コピーしました ✓";
+  } catch {
+    b.textContent = "コピー失敗";
+  }
+  setTimeout(() => { b.textContent = "🔗 レシピURL"; }, 1800);
+});
+
 document.getElementById("btn-share").addEventListener("click", () => {
   const text = "NOIZ LAB で画像にエフェクトをかけた🎛️";
-  const url = "https://image-effector.pregum-dev.workers.dev/";
   window.open(
-    `https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}&url=${encodeURIComponent(url)}&hashtags=NOIZLAB`,
+    `https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}&url=${encodeURIComponent(buildRecipeUrl())}&hashtags=NOIZLAB`,
     "_blank",
     "noopener"
   );
@@ -2817,8 +2854,15 @@ if (sceneHashMatch && sceneHashMatch[1].length < 2048) {
     renderScene(JSON.parse(decodeURIComponent(sceneHashMatch[1])));
   } catch { /* 不正なハッシュは無視してサンプルのまま */ }
 }
-// 文字入れもハッシュ指定可（例: /#text=夏の終わり|1999）
-const textHashMatch = location.hash.match(/text=([^&]+)/);
+// レシピURL（#r=）はプリセット・文字ハッシュより優先して全設定を復元する
+const recipeHashMatch = location.hash.match(/r=([A-Za-z0-9_-]+)/);
+if (recipeHashMatch && recipeHashMatch[1].length < 4000) {
+  try {
+    applyRecipeObject(JSON.parse(b64urlDecode(recipeHashMatch[1])));
+  } catch { /* 不正なレシピURLは無視 */ }
+}
+// 文字入れもハッシュ指定可（例: /#text=夏の終わり|1999）。#r=がある場合はそちらを優先
+const textHashMatch = recipeHashMatch ? null : location.hash.match(/text=([^&]+)/);
 if (textHashMatch && textHashMatch[1].length < 200) {
   try {
     textState.str = decodeURIComponent(textHashMatch[1]).slice(0, 60);

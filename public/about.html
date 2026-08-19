@@ -15,114 +15,13 @@
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=DotGothic16&family=IBM+Plex+Mono:wght@400;600&family=Zen+Kaku+Gothic+New:wght@400;500;700&display=swap" rel="stylesheet" />
-<style>
-:root {
-  --bg: #0b0d0c;
-  --panel: #12150f;
-  --line: #2a2f24;
-  --line-hi: #3d4433;
-  --ink: #e8e6df;
-  --ink-dim: #8b917e;
-  --acid: #c8ff00;
-  --magenta: #ff3ea5;
-  --cyan: #35e0ff;
-  --font-dot: "DotGothic16", monospace;
-  --font-mono: "IBM Plex Mono", monospace;
-  --font-body: "Zen Kaku Gothic New", sans-serif;
-}
-* { box-sizing: border-box; margin: 0; }
-body {
-  background:
-    radial-gradient(1200px 600px at 70% -10%, #1a2012 0%, transparent 60%),
-    radial-gradient(900px 500px at -10% 110%, #1b1020 0%, transparent 55%),
-    var(--bg);
-  color: var(--ink);
-  font-family: var(--font-body);
-  font-size: 15px;
-  line-height: 1.9;
-  padding: 44px 20px 90px;
-}
-.crt {
-  position: fixed; inset: 0; z-index: 99; pointer-events: none;
-  background: repeating-linear-gradient(to bottom, transparent 0, transparent 2px, rgba(0,0,0,.13) 3px, rgba(0,0,0,.13) 4px);
-  mix-blend-mode: multiply;
-}
-main { max-width: 760px; margin: 0 auto; position: relative; z-index: 1; }
-
-.logo {
-  font-family: var(--font-dot); font-size: 24px; letter-spacing: 2px;
-  color: var(--acid); text-decoration: none;
-  text-shadow: 0 0 12px rgba(200,255,0,.4);
-}
-h1 {
-  font-size: clamp(24px, 5vw, 33px); font-weight: 700; line-height: 1.5;
-  margin: 20px 0 14px; text-wrap: balance;
-}
-.lede { color: var(--ink-dim); max-width: 60ch; }
-.lede b { color: var(--ink); font-weight: 500; }
-
-.cta { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 24px; }
-.btn {
-  font-family: var(--font-dot); font-size: 13px; letter-spacing: 1px;
-  padding: 9px 18px; text-decoration: none; display: inline-block;
-  background: #1a1e15; color: var(--ink); border: 1px solid var(--line-hi);
-  clip-path: polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 8px 100%, 0 calc(100% - 8px));
-}
-.btn:hover { background: #242a1b; }
-.btn.primary { background: var(--acid); color: #0b0d0c; border-color: var(--acid); font-weight: 600; }
-.btn.primary:hover { background: #d9ff3d; }
-
-h2 {
-  font-family: var(--font-dot); font-size: 17px; font-weight: 400; letter-spacing: 2px;
-  margin: 52px 0 6px; padding-bottom: 9px; border-bottom: 1px solid var(--line);
-}
-h2 .jp { color: var(--ink-dim); font-size: 13px; letter-spacing: 0; margin-left: 8px; }
-
-.feat { display: grid; gap: 16px; margin-top: 20px; }
-.feat-row { display: grid; grid-template-columns: 128px 1fr; gap: 16px; align-items: baseline; }
-.feat-row dt {
-  font-family: var(--font-dot); font-size: 13px; letter-spacing: 1px; color: var(--acid);
-}
-.feat-row dd { margin: 0; font-size: 14px; }
-.feat-row dd small { display: block; color: var(--ink-dim); font-size: 12.5px; line-height: 1.75; }
-
-.card {
-  background: var(--panel); border: 1px solid var(--line-hi);
-  padding: 18px 20px; margin-top: 20px;
-  clip-path: polygon(0 0, calc(100% - 12px) 0, 100% 12px, 100% 100%, 0 100%);
-}
-.card.privacy { border-left: 3px solid var(--cyan); }
-.card h3 { font-size: 15px; font-weight: 700; margin-bottom: 8px; }
-.card ul { margin: 0; padding-left: 0; list-style: none; display: grid; gap: 8px; }
-.card li { display: grid; grid-template-columns: 16px 1fr; gap: 10px; font-size: 13.5px; }
-.card li span:first-child { color: var(--cyan); }
-.card.free li span:first-child { color: var(--acid); }
-.card p.note { font-size: 12.5px; color: var(--ink-dim); margin-top: 12px; }
-
-.try { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 14px; }
-.try a {
-  font-family: var(--font-mono); font-size: 11.5px; color: var(--cyan);
-  border: 1px solid var(--line); padding: 5px 11px; text-decoration: none;
-}
-.try a:hover { border-color: var(--cyan); }
-
-.tech { font-size: 13.5px; color: var(--ink-dim); margin-top: 16px; }
-.tech code { font-family: var(--font-mono); font-size: 12.5px; color: var(--ink); }
-
-footer {
-  margin-top: 56px; padding-top: 18px; border-top: 1px solid var(--line);
-  font-size: 12px; color: #5a6150; display: flex; flex-wrap: wrap; gap: 14px;
-}
-footer a { color: var(--ink-dim); }
-@media (max-width: 560px) {
-  .feat-row { grid-template-columns: 1fr; gap: 2px; }
-}
-</style>
+<link rel="stylesheet" href="/about.css" />
 </head>
 <body>
 <div class="crt" aria-hidden="true"></div>
 <main>
   <a class="logo" href="/">NOIZ LAB</a>
+  <a class="langlink" href="/about-en">English</a>
   <h1>ブラウザだけで完結する、<br>画像エフェクトの実験室</h1>
   <p class="lede">写真やイラストに<b>グリッチ・ピクセルソート・ディザ・CRT・フィルム調</b>などをかけて、サムネイルやリール用の縦動画まで書き出せるツールです。<b>インストール不要・ログイン不要・無料</b>で、加工処理はすべてあなたのブラウザの中で動きます。</p>
 
@@ -187,16 +86,38 @@ footer a { color: var(--ink-dim); }
     </ul>
   </div>
 
-  <h2>試してみる<span class="jp">／ 直リンク</span></h2>
-  <p class="lede">プリセットとサンプルを指定した状態で開けます。</p>
-  <div class="try">
-    <a href="/#preset=Y2K&sample=0">Y2K × 夕日グリッド</a>
-    <a href="/#preset=NEON&sample=1">NEON × ネオン路地</a>
-    <a href="/#preset=DREAM&sample=2">DREAM × 月と海</a>
-    <a href="/#preset=FILM&sample=3">FILM × 夕暮れの山</a>
-    <a href="/#preset=CINEMA&sample=4">CINEMA × 桜と鳥居</a>
-    <a href="/#preset=VHS&sample=5">VHS × 夏祭りの花火</a>
+  <h2>試してみる<span class="jp">／ その場でプレビュー</span></h2>
+  <p class="lede">クリックすると下のプレビューがその場で切り替わります。</p>
+  <div class="try" id="try-chips">
+    <button data-p="Y2K" data-s="0" class="sel">Y2K × 夕日グリッド</button>
+    <button data-p="NEON" data-s="1">NEON × ネオン路地</button>
+    <button data-p="DREAM" data-s="2">DREAM × 月と海</button>
+    <button data-p="FILM" data-s="3">FILM × 夕暮れの山</button>
+    <button data-p="CINEMA" data-s="4">CINEMA × 桜と鳥居</button>
+    <button data-p="VHS" data-s="5">VHS × 夏祭りの花火</button>
   </div>
+  <div class="try-frame-wrap">
+    <iframe id="try-frame" title="live preview" src="/#embed=1&preset=Y2K&sample=0"></iframe>
+  </div>
+  <div class="cta" style="margin-top:12px">
+    <a class="btn primary" id="try-open" href="/#&preset=Y2K&sample=0">この設定でアプリを開く</a>
+  </div>
+  <script>
+  (function () {
+    const frame = document.getElementById("try-frame");
+    const open = document.getElementById("try-open");
+    const q = "";
+    document.getElementById("try-chips").addEventListener("click", (e) => {
+      const b = e.target.closest("button[data-p]");
+      if (!b) return;
+      document.querySelectorAll("#try-chips button").forEach((x) => x.classList.remove("sel"));
+      b.classList.add("sel");
+      const hash = "preset=" + b.dataset.p + "&sample=" + b.dataset.s;
+      frame.src = "/?v=" + Date.now() + "#embed=1&" + hash;
+      open.href = "/#" + (q ? q.slice(1) + "&" : "") + hash;
+    });
+  })();
+  </script>
 
   <h2>技術<span class="jp">／ どう作られているか</span></h2>
   <p class="tech">

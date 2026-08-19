@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>About NOIZ LAB</title>
+<meta name="description" content="NOIZ LAB is a browser-based glitch/Y2K image effect studio. What it does, how your images are handled, why it is free, and how it is built." />
+<meta property="og:title" content="About NOIZ LAB" />
+<meta property="og:description" content="A browser-based glitch/Y2K image effect studio. What it does, how your images are handled, and how it is built." />
+<meta property="og:type" content="website" />
+<meta property="og:image" content="/og.png" />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="theme-color" content="#0b0d0c" />
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' fill='%230b0d0c'/><rect x='2' y='2' width='5' height='5' fill='%23c8ff00'/><rect x='9' y='9' width='5' height='5' fill='%23ff3ea5'/></svg>" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=DotGothic16&family=IBM+Plex+Mono:wght@400;600&family=Zen+Kaku+Gothic+New:wght@400;500;700&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="/about.css" />
+</head>
+<body>
+<div class="crt" aria-hidden="true"></div>
+<main>
+  <a class="logo" href="/#lang=en">NOIZ LAB</a>
+  <a class="langlink" href="/about">日本語</a>
+  <h1>A glitch studio that runs<br>entirely in your browser</h1>
+  <p class="lede">Add <b>glitch, pixel sort, dither, CRT and film looks</b> to photos and illustrations, then export thumbnails or vertical videos for Reels and Shorts. <b>No install, no login, free</b> — and every edit happens inside your own browser.</p>
+
+  <div class="cta">
+    <a class="btn primary" href="/#lang=en">Open the app</a>
+    <a class="btn" href="/#lang=en&preset=CINEMA&sample=3">See an example</a>
+  </div>
+
+  <h2>What it does<span class="jp">／ Main features</span></h2>
+  <dl class="feat">
+    <div class="feat-row">
+      <dt>Effects</dt>
+      <dd>11 effects you can stack freely
+        <small>Blur / pixel sort / glitch / chromatic aberration / halation / color grade / light leak / pixelate / dither, halftone &amp; ASCII art / CRT curvature, scanlines &amp; VHS tracking / grain &amp; vignette. Or use one of 9 presets — Y2K, VHS, CINEMA, FILM, NEON and more — with a single tap.</small>
+      </dd>
+    </div>
+    <div class="feat-row">
+      <dt>Source images</dt>
+      <dd>Start even without your own image
+        <small>8 sample images drawn entirely in code. You can also generate a source from text in two ways: “Photo” (a diffusion model) and “Scene” (an LLM designs a spec, and your browser draws it as flat vector art). Any language works.</small>
+      </dd>
+    </div>
+    <div class="feat-row">
+      <dt>Finishing</dt>
+      <dd>Turn it into a real thumbnail
+        <small>Title text (font, color, free placement, drag to move), a second image composited as an overlay, and centre-cropped export at 16:9 / 1:1 / 9:16.</small>
+      </dd>
+    </div>
+    <div class="feat-row">
+      <dt>Video</dt>
+      <dd>Vertical video for Reels and Shorts
+        <small>Line up to 8 cuts and join them with fade / wipe / dissolve / glitch wipe plus a Ken Burns zoom. Drop in music and it detects the BPM to cut on the beat. Exports as MP4 (H.264) so you can post it directly, and GIF is supported too.</small>
+      </dd>
+    </div>
+    <div class="feat-row">
+      <dt>Gallery</dt>
+      <dd>Collect works and find the next one
+        <small>Save an image together with its effect recipe, then view your collection as a 2D/3D graph where similar works are linked. Crossbreed two works into a new one, or let it suggest what to make next based on the gaps in the graph.</small>
+      </dd>
+    </div>
+  </dl>
+
+  <h2>Your images<span class="jp">／ Privacy</span></h2>
+  <div class="card privacy">
+    <h3>Images you load never leave your browser</h3>
+    <ul>
+      <li><span>✓</span><span>Effects, text, video and GIF export all run on your device. Your images are not sent to a server.</span></li>
+      <li><span>✓</span><span>The only thing stored on the server is a work you explicitly save with “Save to gallery”.</span></li>
+      <li><span>✓</span><span>Saved works are <b>private by default</b>. Nobody but the owner can open the image.</span></li>
+      <li><span>✓</span><span>You can create a share link per work, but <b>share links expire after about a day</b>. After that the link no longer opens, even if someone has it.</span></li>
+    </ul>
+    <p class="note">Only when you use AI generation is your text prompt sent to the AI provider. No feature sends your image to an AI.</p>
+  </div>
+
+  <h2>Why it is free<span class="jp">／ No billing, no ads</span></h2>
+  <div class="card free">
+    <h3>Built to fit inside free tiers</h3>
+    <ul>
+      <li><span>✓</span><span>The hosted instance runs entirely within Cloudflare's free tier, designed so that billing cannot occur in the first place.</span></li>
+      <li><span>✓</span><span>No ads, no tracking, no account required.</span></li>
+      <li><span>✓</span><span>AI generation has a daily cap. Once it is used up it resets at 00:00 UTC. Effects keep working regardless of the cap.</span></li>
+    </ul>
+  </div>
+
+  <h2>Try it<span class="jp">／ Live preview</span></h2>
+  <p class="lede">Click a chip to swap the live preview below.</p>
+  <div class="try" id="try-chips">
+    <button data-p="Y2K" data-s="0" class="sel">Y2K × sunset grid</button>
+    <button data-p="NEON" data-s="1">NEON × neon alley</button>
+    <button data-p="DREAM" data-s="2">DREAM × moon over sea</button>
+    <button data-p="FILM" data-s="3">FILM × dusk mountains</button>
+    <button data-p="CINEMA" data-s="4">CINEMA × torii &amp; blossom</button>
+    <button data-p="VHS" data-s="5">VHS × fireworks</button>
+  </div>
+  <div class="try-frame-wrap">
+    <iframe id="try-frame" title="live preview" src="/#embed=1&preset=Y2K&sample=0"></iframe>
+  </div>
+  <div class="cta" style="margin-top:12px">
+    <a class="btn primary" id="try-open" href="/#lang=en&preset=Y2K&sample=0">Open this in the app</a>
+  </div>
+  <script>
+  (function () {
+    const frame = document.getElementById("try-frame");
+    const open = document.getElementById("try-open");
+    const q = "&lang=en";
+    document.getElementById("try-chips").addEventListener("click", (e) => {
+      const b = e.target.closest("button[data-p]");
+      if (!b) return;
+      document.querySelectorAll("#try-chips button").forEach((x) => x.classList.remove("sel"));
+      b.classList.add("sel");
+      const hash = "preset=" + b.dataset.p + "&sample=" + b.dataset.s;
+      frame.src = "/?v=" + Date.now() + "#embed=1&" + hash;
+      open.href = "/#" + (q ? q.slice(1) + "&" : "") + hash;
+    });
+  })();
+  </script>
+
+  <h2>How it is built<span class="jp">／ Technical notes</span></h2>
+  <p class="tech">
+    Image processing runs in <code>WebGL2</code> shaders. The pixel sorter, the GIF encoder (LZW and colour quantisation) and the force simulation behind the knowledge graph are all <b>written from scratch with no external libraries</b>. The backend is a single <code>Cloudflare Worker</code>, using <code>Workers AI</code> for generation, <code>R2</code> and <code>D1</code> for the gallery, and <code>Durable Objects</code> for rate limiting. The source is MIT licensed and the AI provider is swappable.
+  </p>
+
+  <footer>
+    <a href="/#lang=en">Open NOIZ LAB</a>
+    <span>An experimental personal project</span>
+  </footer>
+</main>
+</body>
+</html>

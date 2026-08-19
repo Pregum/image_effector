@@ -56,6 +56,7 @@ body {
   font-weight: 400;
   letter-spacing: 2px;
   color: var(--acid);
+  white-space: nowrap;
   position: relative;
   text-shadow: 0 0 12px rgba(200, 255, 0, 0.45);
   user-select: none;
@@ -95,7 +96,7 @@ body {
   letter-spacing: 1px;
 }
 
-.topbar-actions { margin-left: auto; display: flex; gap: 8px; }
+.topbar-actions { margin-left: auto; display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
 
 /* ---- buttons ---- */
 .btn {
@@ -107,6 +108,7 @@ body {
   border: 1px solid var(--line-hi);
   padding: 7px 14px;
   cursor: pointer;
+  white-space: nowrap;
   clip-path: polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 8px 100%, 0 calc(100% - 8px));
   transition: background 0.12s, color 0.12s, box-shadow 0.12s;
 }
@@ -171,11 +173,12 @@ body {
 .drop-hint p:last-child { font-size: 11px; }
 
 .stage-status {
-  display: flex; align-items: center; gap: 18px;
+  display: flex; align-items: center; gap: 18px; flex-wrap: wrap;
   font-family: var(--font-mono);
   font-size: 11px;
   color: var(--ink-dim);
 }
+.stage-status > span, .stage-status > label { white-space: nowrap; }
 .anim-toggle { display: flex; align-items: center; gap: 6px; cursor: pointer; user-select: none; }
 .anim-toggle input { accent-color: var(--acid); }
 
@@ -195,6 +198,7 @@ body {
   font-family: var(--font-mono);
   font-size: 10.5px;
   padding: 3px 10px;
+  white-space: nowrap;
   background: #10130b;
   color: var(--ink);
   border: 1px solid var(--line-hi);
@@ -588,3 +592,16 @@ input[type="range"]::-moz-range-thumb {
   .preset-chip { padding: 8px 12px; }
   .seg button { padding: 8px 2px; }
 }
+
+/* ---- embed mode (about ページ内のライブプレビュー用) ---- */
+body.embed { overflow: hidden; }
+body.embed .topbar,
+body.embed .panel,
+body.embed .stage-tabs,
+body.embed .stage-status,
+body.embed .drop-hint,
+body.embed .crt-overlay { display: none; }
+body.embed .layout { grid-template-columns: 1fr; min-height: 100vh; }
+body.embed .stage { padding: 0; background-image: none; }
+body.embed .stage-inner { min-height: 100vh; }
+body.embed #view { max-height: 100vh; border: none; box-shadow: none; }

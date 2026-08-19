@@ -1,3 +1,5 @@
+import { t, LANG, setLang, localizeDom } from "./i18n.js";
+
 /* NOIZ LAB — 画像エフェクト実験室
  * すべての画像処理はブラウザ内 WebGL2 + Canvas で完結する。
  */
@@ -291,6 +293,9 @@ void main() {
 }`;
 
 // ---------------------------------------------------------------- GL setup
+
+// 埋め込みモード: キャンバスだけを表示する（説明ページのライブプレビュー用）
+if (/[#&]embed=1/.test(location.hash)) document.body.classList.add("embed");
 
 const canvas = document.getElementById("view");
 const gl = canvas.getContext("webgl2", { preserveDrawingBuffer: true, antialias: false });
@@ -1237,7 +1242,7 @@ transbInput.addEventListener("change", async () => {
   try {
     addSlideBitmap(await createImageBitmap(f));
   } catch {
-    transNote.textContent = "画像を読み込めませんでした。";
+    transNote.textContent = t("画像を読み込めませんでした。");
   }
 });
 
@@ -1274,7 +1279,7 @@ const tabPreview = document.getElementById("tab-preview");
 
 function setPreviewMode(on) {
   if (on && !slides.length) {
-    transNote.textContent = "プレビューにはカットを1枚以上追加してください。";
+    transNote.textContent = t("プレビューにはカットを1枚以上追加してください。");
     return;
   }
   previewMode = on;
@@ -1381,7 +1386,7 @@ bgmInput.addEventListener("change", async () => {
     if (bpm) document.getElementById("bpm-input").value = bpm;
     document.getElementById("bgm-clear").disabled = false;
   } catch {
-    transNote.textContent = "BGMを読み込めませんでした（mp3/wav/m4a等）。";
+    transNote.textContent = t("BGMを読み込めませんでした（mp3/wav/m4a等）。");
   }
 });
 document.getElementById("bgm-clear").addEventListener("click", () => {
@@ -1395,7 +1400,7 @@ async function exportSequence() {
   if (slides.length < 1 || seqPlaying || !originalData) return;
   setPreviewMode(false); // 録画が優先。終了後は編集タブに戻る
   transBtn.disabled = true;
-  transBtn.textContent = "録画中…";
+  transBtn.textContent = t("録画中…");
   let audioCtx = null;
   let audioSrc = null;
   try {
@@ -1463,7 +1468,7 @@ async function exportSequence() {
     rec.stop();
     await stopped;
     if (!finished) {
-      transNote.textContent = "書き出しがタイムアウトしました。録画中はこのウィンドウを前面に表示したままにしてください。";
+      transNote.textContent = t("書き出しがタイムアウトしました。録画中はこのウィンドウを前面に表示したままにしてください。");
       return;
     }
     const isMp4 = (rec.mimeType || mime).includes("mp4");
@@ -1478,7 +1483,7 @@ async function exportSequence() {
       ? `MP4で保存しました（${ow}×${oh}${bgmTag}）。そのままリール/ショートに使えます。`
       : `WebMで保存しました（${ow}×${oh}${bgmTag}）。投稿先によってはMP4変換が必要です。`;
   } catch {
-    transNote.textContent = "動画の書き出しに失敗しました（Safariでは非対応の場合があります）。";
+    transNote.textContent = t("動画の書き出しに失敗しました（Safariでは非対応の場合があります）。");
   } finally {
     try { audioSrc?.stop(); } catch { /* 既に終了済みなら無視 */ }
     try { audioCtx?.close(); } catch { /* noop */ }
@@ -1486,7 +1491,7 @@ async function exportSequence() {
     seqFrame = null;
     seqOverride = null;
     markDirty();
-    transBtn.textContent = "▶ 動画書き出し";
+    transBtn.textContent = t("▶ 動画書き出し (MP4)");
     // 結果メッセージを残すため、ここではボタン状態のみ戻す
     transBtn.disabled = slides.length < 1;
   }
@@ -1686,7 +1691,7 @@ async function exportGif() {
     seqOverride = null;
     markDirty();
 
-    gifBtn.textContent = "エンコード中…";
+    gifBtn.textContent = t("エンコード中…");
     await new Promise((r) => setTimeout(r));
     const gif = encodeGif(frames, ow, oh, Math.round(100 / fps));
 
@@ -1698,12 +1703,12 @@ async function exportGif() {
     setTimeout(() => URL.revokeObjectURL(a.href), 5000);
     transNote.textContent = `GIFで保存しました（${ow}×${oh} / ${count}コマ / ${(blob.size / 1024 / 1024).toFixed(1)}MB）。Xにそのまま投稿できます。`;
   } catch (e) {
-    transNote.textContent = "GIFの書き出しに失敗しました。";
+    transNote.textContent = t("GIFの書き出しに失敗しました。");
   } finally {
     seqFrame = null;
     seqOverride = null;
     markDirty();
-    gifBtn.textContent = "◉ GIF書き出し";
+    gifBtn.textContent = t("◉ GIF書き出し");
     gifBtn.disabled = slides.length < 1;
     transBtn.disabled = slides.length < 1;
   }
@@ -1748,6 +1753,12 @@ document.getElementById("btn-recipe-url").addEventListener("click", async () => 
   setTimeout(() => { b.textContent = "🔗 レシピURL"; }, 1800);
 });
 
+const langBtn = document.getElementById("btn-lang");
+if (langBtn) {
+  langBtn.textContent = LANG === "ja" ? "EN" : "日本語";
+  langBtn.addEventListener("click", () => setLang(LANG === "ja" ? "en" : "ja"));
+}
+
 document.getElementById("btn-share").addEventListener("click", () => {
   const text = "NOIZ LAB で画像にエフェクトをかけた🎛️";
   window.open(
@@ -1770,7 +1781,7 @@ const aiBtn = document.getElementById("btn-generate");
 const aiPrompt = document.getElementById("ai-prompt");
 
 function setNote(msg, isError) {
-  aiNote.textContent = msg;
+  aiNote.textContent = t(msg);
   aiNote.classList.toggle("error", !!isError);
 }
 
@@ -1778,7 +1789,7 @@ async function generate() {
   const prompt = aiPrompt.value.trim();
   if (!prompt) return;
   aiBtn.disabled = true;
-  aiBtn.textContent = "生成中…";
+  aiBtn.textContent = t("生成中…");
   setNote("Workers AI で生成しています（10秒前後）…");
   try {
     const res = await fetch("/api/generate", {
@@ -1802,7 +1813,7 @@ async function generate() {
     setNote("生成に失敗しました。少し待って再試行してください。", true);
   } finally {
     aiBtn.disabled = false;
-    aiBtn.textContent = "写真";
+    aiBtn.textContent = t("写真");
   }
 }
 aiBtn.addEventListener("click", generate);
@@ -2137,7 +2148,7 @@ async function generateScene() {
   const prompt = aiPrompt.value.trim();
   if (!prompt) return;
   sceneBtn.disabled = true;
-  sceneBtn.textContent = "描画中…";
+  sceneBtn.textContent = t("描画中…");
   try {
     const res = await fetch("/api/scene", {
       method: "POST",
@@ -2160,7 +2171,7 @@ async function generateScene() {
     setNote("シーン生成に失敗しました。再試行してください。", true);
   } finally {
     sceneBtn.disabled = false;
-    sceneBtn.textContent = "シーン";
+    sceneBtn.textContent = t("シーン");
   }
 }
 sceneBtn.addEventListener("click", generateScene);
@@ -2349,7 +2360,7 @@ galleryKeyInput.addEventListener("change", () => {
 });
 
 function setGalleryNote(msg, isError) {
-  galleryNote.textContent = msg;
+  galleryNote.textContent = t(msg);
   galleryNote.classList.toggle("error", !!isError);
 }
 
@@ -2378,7 +2389,7 @@ async function saveToGallery() {
   }
   const orig = "ギャラリーへ保存";
   btnStore.disabled = true;
-  btnStore.textContent = "保存中…";
+  btnStore.textContent = t("保存中…");
   let result = "保存失敗";
   try {
     // 元画像（レシピと合わせて保存し、再編集可能にする）
@@ -2558,7 +2569,7 @@ document.getElementById("chk-3d").addEventListener("change", (e) => {
 
 viewToggle.addEventListener("click", () => {
   graphMode = !graphMode;
-  viewToggle.textContent = graphMode ? "▤ 一覧" : "◈ グラフ";
+  viewToggle.textContent = t(graphMode ? "▤ 一覧" : "◈ グラフ");
   galleryGrid.hidden = graphMode;
   graphWrap.hidden = !graphMode;
   if (!graphMode) suggestPanel.hidden = true;
@@ -2847,8 +2858,8 @@ function updateActions() {
   };
   if (gSel.length === 1) {
     const n = nodeById(gSel[0]);
-    mk("開く", () => loadWork(n.work));
-    mk("⚡ 突然変異", () => spawnChild(mutateRecipe(n.work.recipe), n.work, [n.work.id]));
+    mk(t("開く"), () => loadWork(n.work));
+    mk(t("⚡ 突然変異"), () => spawnChild(mutateRecipe(n.work.recipe), n.work, [n.work.id]));
     if (n.work.caption) setGalleryNote(`“${n.work.caption}”`);
   } else if (gSel.length === 2) {
     const a = nodeById(gSel[0]);
@@ -3143,22 +3154,22 @@ function renderSuggestions(gaps, loading) {
     if (gap.bridge) {
       const A = gNodes[gap.bridge[0]], B = gNodes[gap.bridge[1]];
       if (A && B) {
-        mk("◇ 掛け合わせる", () =>
+        mk(t("◇ 掛け合わせる"), () =>
           spawnChild(crossRecipes(A.work.recipe, B.work.recipe), A.work, [A.id, B.id]));
       }
     }
     if (gap.combo) {
-      mk("このレシピで作る", () => {
+      mk(t("このレシピで作る"), () => {
         applyRecipeObject(suggestionRecipe(gap));
         closeGallery();
       });
     }
     if (typeof gap.mutate === "number") {
       const n = gNodes[gap.mutate];
-      if (n) mk("⚡ 突然変異", () => spawnChild(mutateRecipe(n.work.recipe), n.work, [n.id]));
+      if (n) mk(t("⚡ 突然変異"), () => spawnChild(mutateRecipe(n.work.recipe), n.work, [n.id]));
     }
     if (gap.ai?.scenePrompt) {
-      mk("シーンを作る", async () => {
+      mk(t("シーンを作る"), async () => {
         if (gap.combo) applyRecipeObject(suggestionRecipe(gap));
         aiPrompt.value = gap.ai.scenePrompt;
         closeGallery();
@@ -3182,13 +3193,13 @@ async function runSuggest() {
     return;
   }
   suggestBtn.disabled = true;
-  suggestBtn.textContent = "分析中…";
+  suggestBtn.textContent = t("分析中…");
   const gaps = analyzeGaps();
   if (!gaps.length) {
     suggestPanel.hidden = false;
     suggestPanel.innerHTML = '<p class="sg-head">目立った穴は見つかりませんでした。作品を増やすと精度が上がります。</p>';
     suggestBtn.disabled = false;
-    suggestBtn.textContent = "◇ 次の一手";
+    suggestBtn.textContent = t("◇ 次の一手");
     return;
   }
   // まず機械的な提案を出し、AIの言語化は後から差し込む（AI枠切れでも機能する）
@@ -3219,7 +3230,7 @@ async function runSuggest() {
   } catch { /* AIが使えなくても機械的な提案は表示済み */ }
   renderSuggestions(gaps, false);
   suggestBtn.disabled = false;
-  suggestBtn.textContent = "◇ 次の一手";
+  suggestBtn.textContent = t("◇ 次の一手");
 }
 suggestBtn.addEventListener("click", runSuggest);
 
@@ -3555,6 +3566,8 @@ document.getElementById("btn-sample").addEventListener("click", () => makeSample
 // URLハッシュで初期状態を指定可（例: /#preset=CINEMA&sample=2）。指定なしはY2Kでデモ
 const sampleMatch = location.hash.match(/sample=(\d+)/);
 makeSample(sampleMatch ? +sampleMatch[1] : 0);
+// 静的HTMLと組み立て済みUIをまとめて翻訳する
+localizeDom();
 const presetMatch = location.hash.match(/preset=([A-Z0-9]+)/i);
 const initialPreset =
   (presetMatch && PRESETS.find((p) => p.name === presetMatch[1].toUpperCase())) || PRESETS[1];
@@ -3630,6 +3643,8 @@ loadFeatures().then((f) => {
     }
     galleryOverlay.hidden = true;
   }
+  const aboutLink = document.querySelector(".about-link");
+  if (aboutLink && LANG !== "ja") aboutLink.setAttribute("href", "/about-en");
   if (!f.ai && !f.gallery) {
     const note = document.querySelector(".panel-footer");
     if (note) {

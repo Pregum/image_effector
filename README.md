@@ -3,7 +3,7 @@
 ブラウザだけで動く、Y2K / グリッチ系の画像エフェクトツール。
 写真やイラストにエフェクトをかけ、サムネイルやリール用の縦動画まで書き出せます。
 
-*A browser-based glitch/Y2K image effect studio. All image processing runs in WebGL2 on the client; the optional backend is a single Cloudflare Worker. No dependencies, MIT licensed.*
+**[English README](README.en.md)** — *A browser-based glitch/Y2K image effect studio. All image processing runs in WebGL2 on the client; the optional backend is a single Cloudflare Worker. No dependencies, MIT licensed.*
 
 **作者のインスタンス**: https://image-effector.pregum-dev.workers.dev
 （[説明ページ](https://image-effector.pregum-dev.workers.dev/about)）
@@ -122,6 +122,7 @@ AI_MODEL_EMBED=bge-m3
 | 掛け合わせ | 2作品のレシピを交叉した子作品を生成。系譜エッジで可視化 |
 | 次の一手 | グラフの構造的な穴を検出し、それを埋める作品をLLMが提案。その場で生成できる |
 | 保護 | IPごとのレート制限 (Durable Objects) と日次AI予算ガード |
+| 多言語 | 日本語・英語のUI。自動判定＋切替ボタン。`/#lang=en` で直リンク可 |
 | PWA | manifest + Service Worker（ネットワーク優先） |
 
 ## 構成
@@ -129,7 +130,8 @@ AI_MODEL_EMBED=bge-m3
 ```
 public/          静的アセット（これだけでTier 1として動く）
   app.js         WebGL2パイプライン・UI・ピクセルソート・GIFエンコーダ・グラフ
-  about.html     サイトの説明ページ
+  i18n.js        日本語・英語の文言
+  about.html     サイトの説明ページ（英語版は about-en.html）
 src/
   worker.js      APIルーティング・ギャラリー・共有・レート制限
   ai.js          AIプロバイダの抽象化（workers-ai / openai / none）

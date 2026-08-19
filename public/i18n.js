@@ -1,0 +1,258 @@
+// 軽量な多言語対応。
+// 日本語の文字列そのものをキーにすることで、既存コードへの後付けを容易にしている。
+// 未翻訳の文字列は日本語のまま表示される（壊れない）。
+
+const EN = {
+  // --- ヘッダ・共通 ---
+  "画像エフェクト実験室": "Image Effect Studio",
+  "NOIZ LAB — 画像エフェクト実験室": "NOIZ LAB — Image Effect Studio",
+  "◧ サンプル": "◧ Samples",
+  "サンプル画像を切り替える": "Cycle through sample images",
+  "画像を開く": "Open image",
+  "◇ おまかせ": "◇ Surprise me",
+  "ランダムに効果をかける": "Apply random effects",
+  "ギャラリー": "Gallery",
+  "ギャラリーへ保存": "Save to gallery",
+  "PNG保存": "Save PNG",
+  "閉じる": "Close",
+  "クリア": "Clear",
+  "サイズ": "Size",
+  "強さ": "Amount",
+
+  // --- ステージ ---
+  "編集": "Edit",
+  "▶ 動画プレビュー": "▶ Video preview",
+  "画像をドラッグ＆ドロップ / 貼り付け（⌘V）でも読み込めます": "Drag & drop or paste (⌘V) an image",
+  "アニメーション": "Animate",
+  "書き出し:": "Export:",
+  "元": "Orig",
+  "現在のエフェクト設定をURLで共有": "Share the current effect settings as a URL",
+  "🔗 レシピURL": "🔗 Recipe URL",
+  "𝕏 シェア": "𝕏 Share",
+  "Xでシェア": "Share on X",
+  "コピーしました ✓": "Copied ✓",
+  "コピー失敗": "Copy failed",
+
+  // --- AI ---
+  "／ AIで元画像を生成": "／ Generate a source image with AI",
+  "例: 夕暮れの高速道路を走る古い車": "e.g. an old car on a highway at dusk",
+  "写真": "Photo",
+  "シーン": "Scene",
+  "「写真」はFLUX.1で画像生成、「シーン」はベクター風イラストを描画。日本語OK。":
+    "“Photo” generates an image with a diffusion model; “Scene” draws a flat vector illustration. Any language works.",
+  "生成中…": "Generating…",
+  "描画中…": "Drawing…",
+  "リクエストが多すぎます。1分ほど待ってから再試行してください。":
+    "Too many requests. Please wait about a minute and try again.",
+  "本日のAI生成の無料枠を使い切りました。日本時間 朝9時にリセットされます。":
+    "Today's free AI quota is used up. It resets at 00:00 UTC.",
+  "生成完了。エフェクトをかけてみてください。": "Done. Try adding some effects.",
+  "生成に失敗しました。少し待って再試行してください。": "Generation failed. Please try again shortly.",
+  "シーンを描画しました。エフェクトをかけてみてください。": "Scene drawn. Try adding some effects.",
+  "シーン生成に失敗しました。再試行してください。": "Scene generation failed. Please try again.",
+  "画像を読み込めませんでした": "Could not load that image",
+
+  // --- プリセット ---
+  "／ プリセット": "／ Presets",
+
+  // --- 文字入れ ---
+  "／ サムネ文字入れ": "／ Thumbnail text",
+  "タイトル文字（| で改行、空で非表示）": "Title text (| for a new line, empty to hide)",
+  "ドット": "Dot",
+  "ゴシック": "Sans",
+  "等幅": "Mono",
+  "白": "White",
+  "黒": "Black",
+  "蛍光": "Neon",
+  "ピンク": "Pink",
+  "横位置": "Horizontal",
+  "縦位置": "Vertical",
+  "プレビュー上をドラッグしても文字を動かせます": "You can also drag the text on the preview",
+
+  // --- 重ね画像 ---
+  "／ 重ね画像": "／ Overlay image",
+  "画像を選ぶ": "Choose image",
+  "不透明度": "Opacity",
+  "通常": "Normal",
+  "スクリーン": "Screen",
+  "乗算": "Multiply",
+  "加算": "Add",
+  "ドラッグで移動。合成した上からエフェクトが全体にかかります。":
+    "Drag to move. Effects are applied on top of the composited result.",
+
+  // --- 動画 ---
+  "／ ショート動画": "／ Short video",
+  "＋ 今の画像": "＋ Current",
+  "＋ ファイル": "＋ File",
+  "1拍": "1 beat",
+  "2拍": "2 beats",
+  "4拍": "4 beats",
+  "♪ 同期": "♪ Sync",
+  "♫ BGMを選ぶ": "♫ Choose music",
+  "フェード": "Fade",
+  "ワイプ": "Wipe",
+  "ディゾルブ": "Dissolve",
+  "グリッチ": "Glitch",
+  "各カットの表示": "Hold per cut",
+  "切替の長さ": "Transition",
+  "ズーム演出 (Ken Burns)": "Zoom (Ken Burns)",
+  "カットごとのエフェクト（追加時の設定を記憶）": "Per-cut effects (remembers settings when added)",
+  "▶ 動画書き出し (MP4)": "▶ Export video (MP4)",
+  "◉ GIF書き出し": "◉ Export GIF",
+  "「＋ 今の画像」でカットを並べ、下の書き出し比率（9:16など）を選んで書き出し。エフェクトと文字は動画全体にかかります。":
+    "Add cuts with “＋ Current”, pick an export ratio (e.g. 9:16) below, then export. Effects and text apply to the whole video.",
+  "録画中…": "Recording…",
+  "エンコード中…": "Encoding…",
+  "「＋ 今の画像」でカットを並べてください。": "Add cuts with “＋ Current”.",
+  "プレビューにはカットを1枚以上追加してください。": "Add at least one cut to preview.",
+  "動画の書き出しに失敗しました（Safariでは非対応の場合があります）。":
+    "Video export failed (may be unsupported in Safari).",
+  "GIFの書き出しに失敗しました。": "GIF export failed.",
+  "書き出しがタイムアウトしました。録画中はこのウィンドウを前面に表示したままにしてください。":
+    "Export timed out. Keep this window in the foreground while recording.",
+  "BGMを読み込めませんでした（mp3/wav/m4a等）。": "Could not load that audio file (mp3/wav/m4a).",
+  "画像を読み込めませんでした。": "Could not load that image.",
+  "カットは最大8枚までです。": "Up to 8 cuts.",
+
+  // --- エフェクトラック ---
+  "／ エフェクトラック": "／ Effect rack",
+  "ぼかし": "Blur",
+  "ピクセルソート": "Pixel sort",
+  "色収差": "Chromatic aberration",
+  "ハレーション": "Halation",
+  "色調エモ化": "Color grade",
+  "光漏れ": "Light leak",
+  "モザイク": "Pixelate",
+  "ディザ / 網点": "Dither / halftone",
+  "ブラウン管": "CRT",
+  "粒子・減光": "Grain & vignette",
+  "よこ": "Horiz",
+  "たて": "Vert",
+  "しきい値・下": "Threshold low",
+  "しきい値・上": "Threshold high",
+  "しきい値": "Threshold",
+  "ずれ幅": "Offset",
+  "◇ パターンを振り直す": "◇ Reroll pattern",
+  "ベイヤー": "Bayer",
+  "ハーフトーン": "Halftone",
+  "アスキー": "ASCII",
+  "スケール": "Scale",
+  "階調": "Levels",
+  "湾曲": "Curvature",
+  "走査線": "Scanlines",
+  "トラッキング": "Tracking",
+  "ゆらぎ": "Wobble",
+  "グレイン": "Grain",
+  "ビネット": "Vignette",
+  "色温度": "Temperature",
+  "フェード": "Fade",
+  "ティール&オレンジ": "Teal & orange",
+  "彩度": "Saturation",
+  "コントラスト": "Contrast",
+  "ディザ後": "After dither",
+  "ディザ前": "Before dither",
+
+  // --- ギャラリー ---
+  "／ 作品ギャラリー": "／ Gallery",
+  "◈ グラフ": "◈ Graph",
+  "▤ 一覧": "▤ List",
+  "アクセスキー": "Access key",
+  "保存した作品（元画像+レシピ）を読み込んで再編集できます。":
+    "Load a saved work (source image + recipe) to keep editing it.",
+  "アクセスキーを入力すると一覧が表示されます。": "Enter your access key to see saved works.",
+  "アクセスキーが違います。": "That access key is not correct.",
+  "読み込み中…": "Loading…",
+  "まだ作品がありません。「ギャラリーへ保存」で追加できます。":
+    "No works yet. Use “Save to gallery” to add one.",
+  "一覧の取得に失敗しました。": "Could not load the gallery.",
+  "読み込みに失敗しました。": "Could not load that work.",
+  "先にアクセスキーを入力してください。": "Please enter your access key first.",
+  "保存中…": "Saving…",
+  "保存しました ✓": "Saved ✓",
+  "保存・系譜記録 ✓": "Saved with lineage ✓",
+  "保存失敗": "Save failed",
+  "保存が多すぎます": "Too many saves",
+  "削除": "Delete",
+  "共有リンクを作る（約1日で失効）": "Create a share link (expires in about a day)",
+  "共有リンクの作成に失敗しました。": "Could not create the share link.",
+  "この共有リンクは期限切れです（共有は約1日で失効します）。":
+    "This share link has expired (share links last about a day).",
+  "共有された作品を読み込みました。自由に加工できます。": "Loaded the shared work. Edit away.",
+  "共有作品の読み込みに失敗しました。": "Could not load the shared work.",
+  "子作品の生成に失敗しました。": "Could not create the child work.",
+
+  // --- グラフ・提案 ---
+  "クリックで選択（2つで掛け合わせ）／ ドラッグで回転・移動":
+    "Click to select (two to crossbreed) ／ drag to rotate or pan",
+  "◇ 次の一手": "◇ What's next",
+  "開く": "Open",
+  "⚡ 突然変異": "⚡ Mutate",
+  "◇ 掛け合わせる": "◇ Crossbreed",
+  "このレシピで作る": "Use this recipe",
+  "シーンを作る": "Generate scene",
+  "掛け合わせ: A(先に選択)の元画像に、AとBを混ぜたレシピを適用します。":
+    "Crossbreed: applies a blend of A and B's recipes to A's source image.",
+  "分析中…": "Analyzing…",
+  "提案にはカットではなく保存作品が必要です。": "Suggestions need saved works, not video cuts.",
+  "目立った穴は見つかりませんでした。作品を増やすと精度が上がります。":
+    "No notable gaps found. Save more works to improve the suggestions.",
+  "AIの提案が届くと、タイトルと「シーンを作る」ボタンが追加されます。":
+    "When the AI responds, titles and “Generate scene” buttons will appear.",
+  "離れたまとまり": "Distant clusters",
+  "未使用の組み合わせ": "Unused combination",
+  "未使用のエフェクト": "Unused effect",
+  "未交配": "No offspring",
+  "2つの系統をつなぐ作品": "A work bridging two lineages",
+  "まだ枝分かれしていない作品": "A work with no branches yet",
+  "AI無料枠を使い切ったため、今回はレシピ類似のみで表示します。":
+    "AI quota is used up, so the graph uses recipe similarity only.",
+
+  // --- フッタ ---
+  "加工はすべてブラウザ内 (WebGL2) で完結し、画像は「ギャラリーへ保存」した時以外サーバーに送信されません。":
+    "All editing happens in your browser (WebGL2). Images are never sent to a server unless you press “Save to gallery”.",
+  "このサイトについて →": "About this site →",
+  "/about": "/about-en",
+  "この構成ではAI生成とギャラリーは無効です。エフェクト・動画・GIFはそのまま使えます。":
+    "AI generation and the gallery are disabled in this deployment. Effects, video and GIF still work.",
+};
+
+// 優先順: URLハッシュ(#lang=en) > 保存済みの選択 > ブラウザの言語
+const fromHash = (location.hash.match(/lang=(ja|en)/) || [])[1];
+const stored = (() => {
+  try { return localStorage.getItem("nl_lang"); } catch { return null; }
+})();
+export const LANG =
+  fromHash || stored || ((navigator.language || "en").toLowerCase().startsWith("ja") ? "ja" : "en");
+
+export function t(ja) {
+  if (LANG === "ja") return ja;
+  return EN[ja] ?? ja;
+}
+
+export function setLang(lang) {
+  try { localStorage.setItem("nl_lang", lang); } catch {}
+  location.reload();
+}
+
+// DOM内の日本語テキスト・placeholder・titleをまとめて置き換える。
+// ラック等を組み立てた後に呼ぶことで、動的に作った要素も対象になる。
+export function localizeDom(root = document.body) {
+  if (LANG === "ja") return;
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  const targets = [];
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) targets.push(n);
+  for (const node of targets) {
+    const raw = node.nodeValue;
+    const key = raw.trim();
+    if (!key || !EN[key]) continue;
+    node.nodeValue = raw.replace(key, EN[key]);
+  }
+  for (const el of root.querySelectorAll("[placeholder]")) {
+    const v = EN[el.getAttribute("placeholder")];
+    if (v) el.setAttribute("placeholder", v);
+  }
+  for (const el of root.querySelectorAll("[title]")) {
+    const v = EN[el.getAttribute("title")];
+    if (v) el.setAttribute("title", v);
+  }
+}

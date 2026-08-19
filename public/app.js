@@ -120,6 +120,7 @@ uniform float u_split;  // ティール&オレンジ 0..1
 uniform float u_sat;    // 彩度 (1が等倍)
 uniform float u_con;    // コントラスト (1が等倍)
 uniform float u_leak;   // 光漏れ 0..1.5
+uniform float u_gradeFirst; // 1でグレードをディザの前に適用
 uniform sampler2D u_text; // 文字オーバーレイ
 uniform float u_textOn;
 
@@ -135,6 +136,17 @@ float bayer(vec2 ip) {
      3,35,11,43, 1,33, 9,41,  51,19,59,27,49,17,57,25,
     15,47, 7,39,13,45, 5,37,  63,31,55,23,61,29,53,21);
   return (float(m[y * 8 + x]) + 0.5) / 64.0;
+}
+
+vec3 applyGrade(vec3 c) {
+  c *= vec3(1.0 + u_temp * 0.12, 1.0 + u_temp * 0.03, 1.0 - u_temp * 0.12);
+  c = c * (1.0 - u_fade * 0.28) + vec3(u_fade * 0.10, u_fade * 0.095, u_fade * 0.105);
+  float l = dot(c, vec3(0.299, 0.587, 0.114));
+  vec3 tone = mix(vec3(0.82, 1.02, 1.16), vec3(1.15, 1.0, 0.84), smoothstep(0.15, 0.85, l));
+  c = mix(c, c * tone, u_split);
+  l = dot(c, vec3(0.299, 0.587, 0.114));
+  c = mix(vec3(l), c, u_sat);
+  return (c - 0.5) * u_con + 0.5;
 }
 
 void main() {
@@ -198,6 +210,9 @@ void main() {
     col += glow * u_halation * vec3(1.15, 0.95, 0.8);
   }
 
+  // 適用順「ディザ前」のグレーディング
+  if (u_gradeFirst > 0.5) col = applyGrade(col);
+
   // ディザ / ハーフトーン
   if (u_dmode == 1) {
     float lv = max(u_levels, 2.0) - 1.0;
@@ -232,15 +247,8 @@ void main() {
     col = bit == 1 ? ink : vec3(0.015, 0.03, 0.02);
   }
 
-  // カラーグレーディング（ハーフトーンがcolを再構成するためディザ類の後段に置く）
-  col *= vec3(1.0 + u_temp * 0.12, 1.0 + u_temp * 0.03, 1.0 - u_temp * 0.12);
-  col = col * (1.0 - u_fade * 0.28) + vec3(u_fade * 0.10, u_fade * 0.095, u_fade * 0.105);
-  float lum2 = dot(col, vec3(0.299, 0.587, 0.114));
-  vec3 st = mix(vec3(0.82, 1.02, 1.16), vec3(1.15, 1.0, 0.84), smoothstep(0.15, 0.85, lum2));
-  col = mix(col, col * st, u_split);
-  lum2 = dot(col, vec3(0.299, 0.587, 0.114));
-  col = mix(vec3(lum2), col, u_sat);
-  col = (col - 0.5) * u_con + 0.5;
+  // カラーグレーディング（既定はディザ類の後段。「ディザ前」選択時は適用済み）
+  if (u_gradeFirst < 0.5) col = applyGrade(col);
 
   // 光漏れ（位置はシード依存。振り直しで移動する）
   if (u_leak > 0.0) {
@@ -375,7 +383,7 @@ const state = {
   dmode: 1, dscale: 3, levels: 4,
   curve: 0.4, scan: 0.5, track: 0, wobble: 0,
   noise: 0.3, vig: 0.4,
-  temp: 0.25, fade: 0.35, split: 0.5, sat: 1.1, con: 1.1,
+  temp: 0.25, fade: 0.35, split: 0.5, sat: 1.1, con: 1.1, gorder: 0,
   leak: 0.7,
 };
 const DEFAULTS = { ...state };
@@ -408,6 +416,7 @@ const MODULES = [
       { key: "halThresh", label: "しきい値", min: 0, max: 1, step: 0.01 },
     ] },
   { id: "grade", name: "COLOR GRADE", jp: "色調エモ化",
+    seg: { key: "gorder", options: ["ディザ後", "ディザ前"] },
     params: [
       { key: "temp", label: "色温度", min: -1, max: 1, step: 0.01 },
       { key: "fade", label: "フェード", min: 0, max: 1, step: 0.01 },
@@ -2260,6 +2269,7 @@ function render(time) {
   gl.uniform1f(u.u_sat, en.grade ? st.sat : 1);
   gl.uniform1f(u.u_con, en.grade ? st.con : 1);
   gl.uniform1f(u.u_leak, en.leak ? st.leak : 0);
+  gl.uniform1f(u.u_gradeFirst, st.gorder ? 1 : 0);
   const textOn = ov ? ov.textOn : textState.str.trim() !== "";
   const textTexUse = ov ? (ov.textTex || clearTex) : (textOn ? textTex : clearTex);
   gl.activeTexture(gl.TEXTURE2);

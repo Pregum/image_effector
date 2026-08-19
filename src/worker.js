@@ -182,6 +182,19 @@ async function handleGenerate(req, env, ai) {
 
 const MAX_BLOB = 8 * 1024 * 1024; // 1ファイル上限 8MB
 
+// OGP用画像の最大辺。SNSのカードは幅600px前後まで拡大されるため、
+// ギャラリー一覧用のサムネ(360px)ではぼやける。app.js の書き出しと同じ値にすること。
+const OG_MAX_EDGE = 1200;
+const THUMB_MAX_EDGE = 360;
+// og:image:width/height に実寸を書くため、クライアントの書き出しと同じ縮小率を再現する
+const scaled = (w, h, scale) => ({
+  w: Math.max(1, Math.round(w * scale)),
+  h: Math.max(1, Math.round(h * scale)),
+});
+const ogSize = (w, h) => scaled(w, h, Math.min(1, OG_MAX_EDGE / Math.max(w, h)));
+// サムネは従来から幅基準（縦長でも幅360pxまで）
+const thumbSize = (w, h) => scaled(w, h, Math.min(1, THUMB_MAX_EDGE / w));
+
 async function saveWork(req, env, ctx, ai) {
   if (!authed(req, env)) return json({ error: "unauthorized" }, 401);
   if (!(await rateLimit(env, clientIp(req) + "#gallery", 10))) {
@@ -196,11 +209,16 @@ async function saveWork(req, env, ctx, ai) {
   }
   const source = form.get("source");
   const thumb = form.get("thumb");
+  // OGP用の大きめの画像。古いクライアントからは送られてこないので任意扱い
+  const ogImage = form.get("og");
   const metaRaw = form.get("meta");
   if (!(source instanceof File) || !(thumb instanceof File) || typeof metaRaw !== "string") {
     return json({ error: "missing fields" }, 400);
   }
   if (source.size > MAX_BLOB || thumb.size > MAX_BLOB) {
+    return json({ error: "file too large" }, 413);
+  }
+  if (ogImage instanceof File && ogImage.size > MAX_BLOB) {
     return json({ error: "file too large" }, 413);
   }
   let meta;
@@ -232,6 +250,11 @@ async function saveWork(req, env, ctx, ai) {
   await env.IMAGES.put(`works/${id}/thumb`, thumb.stream(), {
     httpMetadata: { contentType: thumbType },
   });
+  if (ogImage instanceof File) {
+    await env.IMAGES.put(`works/${id}/og`, ogImage.stream(), {
+      httpMetadata: { contentType: ogImage.type || "image/jpeg" },
+    });
+  }
   await env.DB.prepare(
     `INSERT INTO works (id, created_at, prompt, recipe, width, height, source_type, thumb_type, parent_a, parent_b)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
@@ -352,7 +375,7 @@ async function shareWork(req, env, id) {
 // 共有中の作品のレシピ等（エディタで開くために使う。共有期限内のみ公開）
 async function sharedMeta(env, id) {
   const row = await env.DB.prepare(
-    "SELECT recipe, width, height, prompt, shared FROM works WHERE id = ?"
+    "SELECT recipe, width, height, prompt, thumb_type, shared FROM works WHERE id = ?"
   ).bind(id).first();
   const until = Number(row?.shared) || 0;
   if (!row || until <= Date.now()) return null;
@@ -363,6 +386,7 @@ async function sharedMeta(env, id) {
     width: row.width,
     height: row.height,
     prompt: row.prompt,
+    thumb_type: row.thumb_type || "image/webp",
     shared_until: until,
   };
 }
@@ -371,7 +395,20 @@ const esc = (s) =>
   String(s ?? "").replace(/[&<>"']/g, (c) =>
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
-function sharePage(id, meta, origin) {
+// OGPに出す画像を選ぶ。OGP用の大きい版があればそれを、無ければサムネにフォールバックする
+// （og:image:width/height は実寸と食い違うとカードが崩れるので、選んだ方に合わせて出す）
+async function shareImage(env, id, meta) {
+  const og = await env.IMAGES.head(`works/${id}/og`).catch(() => null);
+  const { w, h } = og ? ogSize(meta.width, meta.height) : thumbSize(meta.width, meta.height);
+  return {
+    path: og ? `/api/works/${id}/og` : `/api/works/${id}/thumb`,
+    type: og ? og.httpMetadata?.contentType || "image/jpeg" : meta.thumb_type,
+    width: w,
+    height: h,
+  };
+}
+
+async function sharePage(id, meta, origin, env) {
   const noStore = { "content-type": "text/html; charset=utf-8", "cache-control": "private, no-store" };
   if (!meta) {
     return new Response(
@@ -387,17 +424,35 @@ function sharePage(id, meta, origin) {
   }
   // captionはLLaVA生成の内部データなので公開ページには出さない
   const title = meta.prompt || "NOIZ LAB の作品";
-  const img = `${origin}/api/works/${id}/thumb`;
+  const desc = "NOIZ LAB で作った画像。リンクは約1日で失効します。";
+  const shareUrl = `${origin}/w/${id}`;
+  const pic = await shareImage(env, id, meta);
+  const img = origin + pic.path;
   const remainH = Math.max(1, Math.round((meta.shared_until - Date.now()) / 3600000));
   return new Response(
     `<!doctype html><html lang="ja"><head><meta charset="utf-8">` +
     `<meta name="viewport" content="width=device-width,initial-scale=1">` +
     `<title>${esc(title)} — NOIZ LAB</title>` +
-    `<meta property="og:title" content="${esc(title)}">` +
-    `<meta property="og:description" content="NOIZ LAB で作った画像。リンクは約1日で失効します。">` +
-    `<meta property="og:image" content="${esc(img)}">` +
+    `<meta name="description" content="${esc(desc)}">` +
+    `<link rel="canonical" href="${esc(shareUrl)}">` +
     `<meta property="og:type" content="website">` +
+    `<meta property="og:site_name" content="NOIZ LAB">` +
+    `<meta property="og:locale" content="ja_JP">` +
+    `<meta property="og:url" content="${esc(shareUrl)}">` +
+    `<meta property="og:title" content="${esc(title)}">` +
+    `<meta property="og:description" content="${esc(desc)}">` +
+    // 画像そのものがカードに出るように、加工後の画像を絶対URLで指す。
+    // 幅・高さ・MIMEを添えるとクローラが取得前にカードを組み立てられる
+    `<meta property="og:image" content="${esc(img)}">` +
+    `<meta property="og:image:type" content="${esc(pic.type)}">` +
+    `<meta property="og:image:width" content="${pic.width}">` +
+    `<meta property="og:image:height" content="${pic.height}">` +
+    `<meta property="og:image:alt" content="${esc(title)}">` +
     `<meta name="twitter:card" content="summary_large_image">` +
+    `<meta name="twitter:title" content="${esc(title)}">` +
+    `<meta name="twitter:description" content="${esc(desc)}">` +
+    `<meta name="twitter:image" content="${esc(img)}">` +
+    `<meta name="twitter:image:alt" content="${esc(title)}">` +
     `<link rel="preconnect" href="https://fonts.googleapis.com">` +
     `<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DotGothic16&family=Zen+Kaku+Gothic+New:wght@400;500&display=swap">` +
     `<style>` +
@@ -417,7 +472,7 @@ function sharePage(id, meta, origin) {
     `</style></head><body><main>` +
     `<a class="logo" href="${esc(origin)}/">NOIZ LAB</a>` +
     `<h1>${esc(title)}</h1>` +
-    `<img src="${esc(img)}" alt="${esc(title)}">` +
+    `<img src="${esc(img)}" width="${pic.width}" height="${pic.height}" alt="${esc(title)}">` +
     `<div class="meta">` +
     `<a class="btn" href="${esc(origin)}/#w=${esc(id)}">この作品をエディタで開く</a>` +
     `<span class="expiry">この共有リンクは残り約${remainH}時間で失効します</span>` +
@@ -428,7 +483,7 @@ function sharePage(id, meta, origin) {
 
 async function deleteWork(req, env, id) {
   if (!authed(req, env)) return json({ error: "unauthorized" }, 401);
-  await env.IMAGES.delete([`works/${id}/source`, `works/${id}/thumb`]);
+  await env.IMAGES.delete([`works/${id}/source`, `works/${id}/thumb`, `works/${id}/og`]);
   await env.DB.prepare(`DELETE FROM works WHERE id = ?`).bind(id).run();
   return json({ ok: true });
 }
@@ -686,12 +741,12 @@ export default {
     // 共有ページ（作品ごと・24時間で失効）
     const sm = pathname.match(/^\/w\/([0-9a-f-]{36})$/);
     if (sm && req.method === "GET" && gallery) {
-      return sharePage(sm[1], await sharedMeta(env, sm[1]), url.origin);
+      return sharePage(sm[1], await sharedMeta(env, sm[1]), url.origin, env);
     }
 
-    const m = pathname.match(/^\/api\/works\/([0-9a-f-]{36})(?:\/(source|thumb|embed|share|meta))?$/);
+    const m = pathname.match(/^\/api\/works\/([0-9a-f-]{36})(?:\/(source|thumb|og|embed|share|meta))?$/);
     if (m) {
-      if (req.method === "GET" && (m[2] === "source" || m[2] === "thumb")) {
+      if (req.method === "GET" && (m[2] === "source" || m[2] === "thumb" || m[2] === "og")) {
         return getWorkImage(req, env, url, m[1], m[2]);
       }
       if (req.method === "POST" && m[2] === "embed") {

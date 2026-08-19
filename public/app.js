@@ -627,6 +627,7 @@ document.getElementById("btn-random").addEventListener("click", () => {
 
 let originalData = null; // ImageData（処理解像度、重ね画像の合成後）
 let baseData = null;     // 重ね画像を載せる前のベース画像
+let sourceGen = 0;       // 元画像が差し替わるたびに増える。共有リンクの使い回し判定に使う
 
 // ---- 重ね画像（ソース段階で合成し、エフェクトは合成後の全体にかかる）
 const OVERLAY_BLENDS = ["source-over", "screen", "multiply", "lighter"];
@@ -634,6 +635,7 @@ const overlayState = { img: null, x: 0.7, y: 0.35, scale: 0.4, opacity: 1, blend
 
 function compositeSource() {
   if (!baseData) return;
+  sourceGen++;
   if (!overlayState.img) {
     originalData = baseData;
     uploadSource();
@@ -1759,13 +1761,60 @@ if (langBtn) {
   langBtn.addEventListener("click", () => setLang(LANG === "ja" ? "en" : "ja"));
 }
 
-document.getElementById("btn-share").addEventListener("click", () => {
-  const text = "NOIZ LAB で画像にエフェクトをかけた🎛️";
-  window.open(
-    `https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}&url=${encodeURIComponent(buildRecipeUrl())}&hashtags=NOIZLAB`,
-    "_blank",
-    "noopener"
-  );
+// ---- Xへのシェア
+// レシピURL(#r=)のハッシュはサーバに届かないため、そのまま投稿してもOGPには
+// サイト共通の画像しか出ない。ギャラリーが使える構成では作品を保存して
+// 共有リンク(/w/<id>)を投稿し、加工後の画像そのものをカードに出す。
+let lastShare = null; // { key, id, until } 直前に作った共有リンク
+
+async function shareLinkForCurrent() {
+  // レシピと元画像が同じなら、直前に作った共有リンクを使い回す（連打で作品が増えないように）
+  const key = `${sourceGen}|${buildRecipeUrl()}`;
+  if (lastShare && lastShare.key === key && lastShare.until > Date.now() + 60000) {
+    return `${location.origin}/w/${lastShare.id}`;
+  }
+  const { id } = await uploadWork();
+  if (!id) return null;
+  const res = await fetch(`/api/works/${id}/share`, {
+    method: "POST",
+    headers: { ...keyHeaders(), "content-type": "application/json" },
+    body: JSON.stringify({ on: true }),
+  });
+  if (!res.ok) return null;
+  const { shared_until } = await res.json();
+  lastShare = { key, id, until: shared_until };
+  return `${location.origin}/w/${id}`;
+}
+
+const shareBtn = document.getElementById("btn-share");
+shareBtn.addEventListener("click", async () => {
+  const text = t("NOIZ LAB で画像にエフェクトをかけた🎛️");
+  // ポップアップブロックを避けるため、非同期処理の前にウィンドウを開いておく
+  const win = window.open("", "_blank");
+  let url = buildRecipeUrl();
+  let withImage = false;
+  if (FEATURES.gallery && galleryKey() && originalData) {
+    shareBtn.disabled = true;
+    shareBtn.textContent = t("共有リンク作成中…");
+    try {
+      const shared = await shareLinkForCurrent();
+      if (shared) { url = shared; withImage = true; }
+    } catch { /* 失敗したらレシピURLのまま投稿する */ }
+    shareBtn.disabled = false;
+    shareBtn.textContent = t(withImage ? "𝕏 シェア" : "共有リンク失敗");
+    if (!withImage) {
+      setTimeout(() => { shareBtn.textContent = t("𝕏 シェア"); }, 1800);
+    }
+  }
+  const intent =
+    `https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}` +
+    `&url=${encodeURIComponent(url)}&hashtags=NOIZLAB`;
+  if (win) {
+    try { win.opener = null; } catch { /* 参照を切れない環境は無視 */ }
+    win.location.replace(intent);
+  } else {
+    window.open(intent, "_blank", "noopener");
+  }
 });
 
 document.getElementById("chk-anim").addEventListener("change", (e) => {
@@ -2380,6 +2429,60 @@ function currentRecipe() {
   return { enabled: { ...enabled }, state: { ...state }, seed, text: { ...textState } };
 }
 
+// OGP用画像の最大辺。SNSのカードは幅600px前後まで拡大されるので、
+// 一覧用サムネ(360px)とは別に大きめの版を持たせる。worker.js の OG_MAX_EDGE と揃えること
+const OG_MAX_EDGE = 1200;
+const THUMB_MAX_EDGE = 360;
+
+// 現在の描画結果をscale倍のcanvasに写す。fillは透過をつぶす色（JPEG用）
+function renderedCanvas(scale, fill) {
+  const c = document.createElement("canvas");
+  c.width = Math.max(1, Math.round(W * scale));
+  c.height = Math.max(1, Math.round(H * scale));
+  const cx = c.getContext("2d");
+  if (fill) { cx.fillStyle = fill; cx.fillRect(0, 0, c.width, c.height); }
+  cx.drawImage(canvas, 0, 0, c.width, c.height);
+  return c;
+}
+
+// 現在の作品をギャラリーへ保存する。成功したら作品IDを返す。
+// UIの見せ方は呼び出し側に任せる（保存ボタン／シェアボタンで出し分けるため）
+async function uploadWork() {
+  // 元画像（レシピと合わせて保存し、再編集可能にする）
+  const sc = document.createElement("canvas");
+  sc.width = W; sc.height = H;
+  sc.getContext("2d").putImageData(originalData, 0, 0);
+  const source = await toBlobAsync(sc, "image/webp", 0.92);
+  // レンダリング結果。awaitを挟むと描画が進むので、写し取りは先にまとめて済ませる
+  render(animate ? performance.now() / 1000 : frozenTime);
+  const tc = renderedCanvas(Math.min(1, THUMB_MAX_EDGE / W), null);
+  // OGP用は長辺基準（縦長でも重くならないように）。SNS側の対応が一番広いJPEGで書き出す
+  const oc = renderedCanvas(Math.min(1, OG_MAX_EDGE / Math.max(W, H)), "#000");
+  const thumb = await toBlobAsync(tc, "image/webp", 0.85);
+  const ogImage = await toBlobAsync(oc, "image/jpeg", 0.86);
+
+  const fd = new FormData();
+  fd.append("source", source, "source");
+  fd.append("thumb", thumb, "thumb");
+  if (ogImage) fd.append("og", ogImage, "og");
+  fd.append("meta", JSON.stringify({
+    recipe: currentRecipe(),
+    prompt: aiPrompt.value.trim() || null,
+    width: W,
+    height: H,
+    parents: pendingParents || undefined,
+  }));
+  const res = await fetch("/api/works", {
+    method: "POST",
+    headers: { "x-gallery-key": galleryKey() },
+    body: fd,
+  });
+  if (!res.ok) return { status: res.status, id: null };
+  pendingParents = null; // 二重記録を防ぐ
+  const { id } = await res.json();
+  return { status: res.status, id };
+}
+
 async function saveToGallery() {
   if (!originalData) return;
   if (!galleryKey()) {
@@ -2388,47 +2491,19 @@ async function saveToGallery() {
     return;
   }
   const orig = "ギャラリーへ保存";
+  const hadParents = !!pendingParents;
   btnStore.disabled = true;
   btnStore.textContent = t("保存中…");
   let result = "保存失敗";
   try {
-    // 元画像（レシピと合わせて保存し、再編集可能にする）
-    const sc = document.createElement("canvas");
-    sc.width = W; sc.height = H;
-    sc.getContext("2d").putImageData(originalData, 0, 0);
-    const source = await toBlobAsync(sc, "image/webp", 0.92);
-    // レンダリング結果のサムネイル
-    render(animate ? performance.now() / 1000 : frozenTime);
-    const scale = Math.min(1, 360 / W);
-    const tc = document.createElement("canvas");
-    tc.width = Math.max(1, Math.round(W * scale));
-    tc.height = Math.max(1, Math.round(H * scale));
-    tc.getContext("2d").drawImage(canvas, 0, 0, tc.width, tc.height);
-    const thumb = await toBlobAsync(tc, "image/webp", 0.85);
-
-    const fd = new FormData();
-    fd.append("source", source, "source");
-    fd.append("thumb", thumb, "thumb");
-    fd.append("meta", JSON.stringify({
-      recipe: currentRecipe(),
-      prompt: aiPrompt.value.trim() || null,
-      width: W,
-      height: H,
-      parents: pendingParents || undefined,
-    }));
-    const res = await fetch("/api/works", {
-      method: "POST",
-      headers: { "x-gallery-key": galleryKey() },
-      body: fd,
-    });
-    if (res.status === 401) {
+    const { status, id } = await uploadWork();
+    if (status === 401) {
       openGallery();
       setGalleryNote("アクセスキーが違います。", true);
-    } else if (res.status === 429) {
+    } else if (status === 429) {
       result = "保存が多すぎます";
-    } else if (res.ok) {
-      result = pendingParents ? "保存・系譜記録 ✓" : "保存しました ✓";
-      pendingParents = null; // 二重記録を防ぐ
+    } else if (id) {
+      result = hadParents ? "保存・系譜記録 ✓" : "保存しました ✓";
     }
   } catch { /* result は保存失敗のまま */ }
   btnStore.textContent = result;
@@ -3618,6 +3693,7 @@ if (sharedHashMatch) {
 // バックエンドが無い構成（静的ホスティングのみ）でも壊れないように、
 // 使えない機能のUIは隠す。取得できなければ「どちらも無し」とみなす。
 const FEATURES_OFF = { ai: false, gallery: false };
+let FEATURES = FEATURES_OFF;
 
 async function loadFeatures() {
   try {
@@ -3634,6 +3710,7 @@ async function loadFeatures() {
 }
 
 loadFeatures().then((f) => {
+  FEATURES = f;
   if (!f.ai) {
     document.querySelector(".ai-box")?.setAttribute("hidden", "");
   }

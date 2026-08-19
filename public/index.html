@@ -56,6 +56,10 @@
 
 <main class="layout">
   <section class="stage" id="stage">
+    <div class="stage-tabs">
+      <button id="tab-edit" class="sel">編集</button>
+      <button id="tab-preview">▶ 動画プレビュー</button>
+    </div>
     <div class="stage-inner">
       <canvas id="view"></canvas>
       <div id="crop-guide" hidden></div>
@@ -142,6 +146,18 @@
         <button id="slide-add" class="btn">＋ 今の画像</button>
         <button id="slide-add-file" class="btn">＋ ファイル</button>
       </div>
+      <div class="ai-row bpm-row">
+        <input id="bpm-input" type="number" min="40" max="220" value="120" title="BPM" />
+        <div class="seg bpm-beats" id="bpm-beats">
+          <button>1拍</button><button class="sel">2拍</button><button>4拍</button>
+        </div>
+        <button id="bpm-apply" class="btn">♪ 同期</button>
+      </div>
+      <div class="ai-row">
+        <button id="bgm-open" class="btn">♫ BGMを選ぶ</button>
+        <button id="bgm-clear" class="btn" disabled>クリア</button>
+      </div>
+      <p class="text-hint" id="bgm-name" hidden></p>
       <div class="seg" id="trans-mode-seg">
         <button>フェード</button><button>ワイプ</button><button>ディゾルブ</button><button class="sel">グリッチ</button>
       </div>
@@ -172,6 +188,7 @@
 <input type="file" id="file-input" accept="image/*" hidden />
 <input type="file" id="overlay-input" accept="image/*" hidden />
 <input type="file" id="transb-input" accept="image/*" hidden />
+<input type="file" id="bgm-input" accept="audio/*" hidden />
 <script type="module" src="/app.js"></script>
 </body>
 </html>

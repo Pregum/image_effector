@@ -276,6 +276,38 @@ body {
 #text-input:focus { border-color: var(--acid); box-shadow: 0 0 8px rgba(200, 255, 0, 0.2); }
 .panel-section .seg { margin-top: 6px; }
 .text-hint { margin-top: 7px; font-size: 10.5px; color: #5a6150; }
+.stage-tabs { display: flex; gap: 6px; }
+.stage-tabs button {
+  font-family: var(--font-dot);
+  font-size: 12px;
+  letter-spacing: 1px;
+  padding: 5px 14px;
+  background: #10130b;
+  color: var(--ink-dim);
+  border: 1px solid var(--line);
+  border-bottom: none;
+  cursor: pointer;
+}
+.stage-tabs button.sel {
+  color: var(--acid);
+  border-color: var(--acid);
+  background: #1a2010;
+  box-shadow: 0 0 10px rgba(200, 255, 0, 0.15);
+}
+
+.bpm-row { align-items: stretch; }
+#bpm-input {
+  width: 64px;
+  background: #0c0e09;
+  border: 1px solid var(--line-hi);
+  color: var(--acid);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  padding: 4px 8px;
+  outline: none;
+}
+.bpm-beats { flex: 1; margin-top: 0 !important; }
+
 .slide-strip { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
 .slide-item { position: relative; width: 96px; }
 .slide-item img {

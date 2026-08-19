@@ -1146,10 +1146,89 @@ document.getElementById("chk-zoom").addEventListener("change", (e) => {
   seqState.zoom = e.target.checked;
 });
 
+// ---- プレビュータブ（編集=静止画 / プレビュー=カット列をループ再生）
+let previewMode = false;
+let previewStart = 0;
+const tabEdit = document.getElementById("tab-edit");
+const tabPreview = document.getElementById("tab-preview");
+
+function setPreviewMode(on) {
+  if (on && !slides.length) {
+    transNote.textContent = "プレビューにはカットを1枚以上追加してください。";
+    return;
+  }
+  previewMode = on;
+  previewStart = performance.now();
+  tabEdit.classList.toggle("sel", !on);
+  tabPreview.classList.toggle("sel", on);
+  if (!on) seqFrame = null;
+  markDirty();
+}
+tabEdit.addEventListener("click", () => setPreviewMode(false));
+tabPreview.addEventListener("click", () => setPreviewMode(true));
+
+// ---- BPM同期（カット間隔 = 拍数 × 60/BPM になるよう表示時間を設定）
+let bpmBeats = 2;
+document.getElementById("bpm-beats").querySelectorAll("button").forEach((b, i) => {
+  b.addEventListener("click", () => {
+    bpmBeats = [1, 2, 4][i];
+    document.getElementById("bpm-beats").querySelectorAll("button")
+      .forEach((v) => v.classList.remove("sel"));
+    b.classList.add("sel");
+  });
+});
+document.getElementById("bpm-apply").addEventListener("click", () => {
+  const bpm = Math.min(220, Math.max(40, +document.getElementById("bpm-input").value || 120));
+  const interval = (60 / bpm) * bpmBeats;
+  let msg = "";
+  if (interval - seqState.trans < 0.1) {
+    seqState.trans = Math.max(0.2, Math.round((interval / 2) * 10) / 10);
+    document.getElementById("trans-duration").value = seqState.trans;
+    document.getElementById("trans-duration-val").textContent = `${seqState.trans.toFixed(1)}s`;
+    msg = "／切替が長すぎたため短縮しました";
+  }
+  seqState.hold = Math.min(3, Math.max(0.1, interval - seqState.trans));
+  document.getElementById("slide-hold").value = seqState.hold;
+  document.getElementById("slide-hold-val").textContent = `${seqState.hold.toFixed(2)}s`;
+  transNote.textContent =
+    `♪ ${bpm}BPM × ${bpmBeats}拍 = ${interval.toFixed(2)}s間隔` +
+    `（表示${seqState.hold.toFixed(2)}s + 切替${seqState.trans.toFixed(1)}s）${msg}`;
+});
+
+// ---- BGM（録画時に音声トラックとして合成）
+let bgmBuffer = null;
+const bgmInput = document.getElementById("bgm-input");
+const bgmNameEl = document.getElementById("bgm-name");
+document.getElementById("bgm-open").addEventListener("click", () => bgmInput.click());
+bgmInput.addEventListener("change", async () => {
+  const f = bgmInput.files[0];
+  bgmInput.value = "";
+  if (!f) return;
+  try {
+    const ac = new (window.AudioContext || window.webkitAudioContext)();
+    bgmBuffer = await ac.decodeAudioData(await f.arrayBuffer());
+    ac.close();
+    bgmNameEl.hidden = false;
+    bgmNameEl.textContent = `♫ ${f.name}（${bgmBuffer.duration.toFixed(1)}s）`;
+    document.getElementById("bgm-clear").disabled = false;
+  } catch {
+    transNote.textContent = "BGMを読み込めませんでした（mp3/wav/m4a等）。";
+  }
+});
+document.getElementById("bgm-clear").addEventListener("click", () => {
+  bgmBuffer = null;
+  bgmNameEl.hidden = true;
+  bgmNameEl.textContent = "";
+  document.getElementById("bgm-clear").disabled = true;
+});
+
 async function exportSequence() {
   if (slides.length < 1 || seqPlaying || !originalData) return;
+  setPreviewMode(false); // 録画が優先。終了後は編集タブに戻る
   transBtn.disabled = true;
   transBtn.textContent = "録画中…";
+  let audioCtx = null;
+  let audioSrc = null;
   try {
     // 書き出し比率で中央クロップし、長辺1280・偶数サイズ(H.264要件)へスケール
     let sx = 0, sy = 0, sw = canvas.width, sh = canvas.height;
@@ -1172,16 +1251,27 @@ async function exportSequence() {
     const cctx = crop.getContext("2d");
 
     const stream = crop.captureStream(30);
+    // BGMがあれば音声トラックを合成する
+    let recStream = stream;
+    if (bgmBuffer) {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      await audioCtx.resume();
+      audioSrc = audioCtx.createBufferSource();
+      audioSrc.buffer = bgmBuffer;
+      const dest = audioCtx.createMediaStreamDestination();
+      audioSrc.connect(dest);
+      recStream = new MediaStream([
+        ...stream.getVideoTracks(),
+        ...dest.stream.getAudioTracks(),
+      ]);
+    }
     // リール等でそのまま使えるMP4(H.264)を最優先、非対応環境はWebMへ
-    const mime = [
-      "video/mp4;codecs=avc1.42E01E",
-      "video/mp4",
-      "video/webm;codecs=vp9",
-      "video/webm;codecs=vp8",
-      "video/webm",
-    ].find((m) => window.MediaRecorder && MediaRecorder.isTypeSupported(m));
+    const mimeList = bgmBuffer
+      ? ["video/mp4;codecs=avc1.42E01E,mp4a.40.2", "video/mp4", "video/webm;codecs=vp9,opus", "video/webm"]
+      : ["video/mp4;codecs=avc1.42E01E", "video/mp4", "video/webm;codecs=vp9", "video/webm;codecs=vp8", "video/webm"];
+    const mime = mimeList.find((m) => window.MediaRecorder && MediaRecorder.isTypeSupported(m));
     if (!mime) throw new Error("MediaRecorder unsupported");
-    const rec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 10_000_000 });
+    const rec = new MediaRecorder(recStream, { mimeType: mime, videoBitsPerSecond: 10_000_000 });
     const chunks = [];
     rec.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
     const stopped = new Promise((res) => (rec.onstop = res));
@@ -1193,6 +1283,7 @@ async function exportSequence() {
       trans: seqState.trans * 1000,
       blit: () => cctx.drawImage(canvas, sx, sy, sw, sh, 0, 0, ow, oh),
     };
+    if (audioSrc) audioSrc.start();
     markDirty();
     // ウィンドウが隠れるとrAFが止まり進行しないため、タイムアウトで中断する
     const totalMs = seqTotalSec() * 1000 + 400;
@@ -1213,12 +1304,15 @@ async function exportSequence() {
     a.download = `noizlab_video_${Date.now()}.${isMp4 ? "mp4" : "webm"}`;
     a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    const bgmTag = bgmBuffer ? "♫BGM入り" : "";
     transNote.textContent = isMp4
-      ? `MP4で保存しました（${ow}×${oh}）。そのままリール/ショートに使えます。`
-      : `WebMで保存しました（${ow}×${oh}）。投稿先によってはMP4変換が必要です。`;
+      ? `MP4で保存しました（${ow}×${oh}${bgmTag}）。そのままリール/ショートに使えます。`
+      : `WebMで保存しました（${ow}×${oh}${bgmTag}）。投稿先によってはMP4変換が必要です。`;
   } catch {
     transNote.textContent = "動画の書き出しに失敗しました（Safariでは非対応の場合があります）。";
   } finally {
+    try { audioSrc?.stop(); } catch { /* 既に終了済みなら無視 */ }
+    try { audioCtx?.close(); } catch { /* noop */ }
     seqPlaying = null;
     seqFrame = null;
     markDirty();
@@ -1769,6 +1863,25 @@ function frame() {
       const f = seqPlaying.onend;
       seqPlaying.onend = null;
       f();
+    }
+  } else if (previewMode) {
+    if (!slides.length) {
+      setPreviewMode(false);
+    } else {
+      const n = slides.length;
+      const holdMs = seqState.hold * 1000;
+      const transMs = seqState.trans * 1000;
+      const total = n * holdMs + (n - 1) * transMs;
+      const el = total > 0 ? (performance.now() - previewStart) % (total + 300) : 0;
+      const s = seqAt(Math.min(el, total), n, holdMs, transMs, seqState.zoom);
+      seqFrame = {
+        texA: slides[s.a].tex,
+        texB: slides[s.b].tex,
+        t: s.t,
+        zoomA: s.zoomA,
+        zoomB: s.zoomB,
+      };
+      dirty = true;
     }
   }
   const needsAnim = animate && originalData &&

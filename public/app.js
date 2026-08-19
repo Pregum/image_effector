@@ -1102,6 +1102,8 @@ function seqTotalSec() {
 
 function updateSeqNote() {
   transBtn.disabled = slides.length < 1 || !!seqPlaying;
+  const gb = document.getElementById("btn-gif");
+  if (gb) gb.disabled = slides.length < 1 || !!seqPlaying;
   transNote.textContent = slides.length
     ? `${slides.length}カット / 約${seqTotalSec().toFixed(1)}秒の動画になります。`
     : "「＋ 今の画像」でカットを並べてください。";
@@ -1407,6 +1409,220 @@ async function exportSequence() {
   }
 }
 transBtn.addEventListener("click", exportSequence);
+
+// ---- GIF書き出し（オフライン描画 + 自前GIF89aエンコーダ）
+// リアルタイム録画不要なのでウィンドウが隠れていても書き出せる
+
+function medianCutPalette(frames, maxColors) {
+  const samples = [];
+  const totalPx = frames.length * (frames[0].data.length / 4);
+  const step = Math.max(1, Math.floor(totalPx / 40000));
+  for (const fr of frames) {
+    const d = fr.data;
+    for (let p = 0; p < d.length; p += 4 * step) {
+      samples.push([d[p], d[p + 1], d[p + 2]]);
+    }
+  }
+  let boxes = [samples];
+  while (boxes.length < maxColors) {
+    boxes.sort((a, b) => b.length - a.length);
+    const box = boxes[0];
+    if (box.length < 2) break;
+    boxes.shift();
+    const mins = [255, 255, 255];
+    const maxs = [0, 0, 0];
+    for (const c of box) {
+      for (let k = 0; k < 3; k++) {
+        if (c[k] < mins[k]) mins[k] = c[k];
+        if (c[k] > maxs[k]) maxs[k] = c[k];
+      }
+    }
+    const ranges = [maxs[0] - mins[0], maxs[1] - mins[1], maxs[2] - mins[2]];
+    const axis = ranges.indexOf(Math.max(...ranges));
+    box.sort((a, b) => a[axis] - b[axis]);
+    const mid = box.length >> 1;
+    boxes.push(box.slice(0, mid), box.slice(mid));
+  }
+  return boxes.map((box) => {
+    let r = 0, g = 0, b = 0;
+    for (const c of box) { r += c[0]; g += c[1]; b += c[2]; }
+    const n = box.length || 1;
+    return [Math.round(r / n), Math.round(g / n), Math.round(b / n)];
+  });
+}
+
+function lzwEncode(indices, minCodeSize) {
+  const clearCode = 1 << minCodeSize;
+  const eoiCode = clearCode + 1;
+  let codeSize = minCodeSize + 1;
+  let dict = new Map();
+  let nextCode = eoiCode + 1;
+  const bytes = [];
+  let cur = 0, curBits = 0;
+  const push = (code) => {
+    cur |= code << curBits;
+    curBits += codeSize;
+    while (curBits >= 8) { bytes.push(cur & 0xff); cur >>>= 8; curBits -= 8; }
+  };
+  push(clearCode);
+  let buffer = indices[0];
+  for (let i = 1; i < indices.length; i++) {
+    const c = indices[i];
+    const key = buffer * 256 + c;
+    if (dict.has(key)) {
+      buffer = dict.get(key);
+      continue;
+    }
+    push(buffer);
+    if (nextCode === 4096) {
+      push(clearCode);
+      dict = new Map();
+      nextCode = eoiCode + 1;
+      codeSize = minCodeSize + 1;
+    } else {
+      dict.set(key, nextCode);
+      nextCode++;
+      if (nextCode > (1 << codeSize) && codeSize < 12) codeSize++;
+    }
+    buffer = c;
+  }
+  push(buffer);
+  push(eoiCode);
+  if (curBits > 0) bytes.push(cur & 0xff);
+  return bytes;
+}
+
+function encodeGif(frames, w, h, delayCs) {
+  const palette = medianCutPalette(frames, 256);
+  while (palette.length < 256) palette.push([0, 0, 0]);
+  // 量子化キー(5bit/ch)→最近傍indexのキャッシュ
+  const cache = new Int16Array(32768).fill(-1);
+  const nearest = (r, g, b) => {
+    const key = ((r >> 3) << 10) | ((g >> 3) << 5) | (b >> 3);
+    let idx = cache[key];
+    if (idx >= 0) return idx;
+    let best = 0, bestD = Infinity;
+    for (let i = 0; i < palette.length; i++) {
+      const p = palette[i];
+      const d = (r - p[0]) ** 2 + (g - p[1]) ** 2 + (b - p[2]) ** 2;
+      if (d < bestD) { bestD = d; best = i; }
+    }
+    cache[key] = best;
+    return best;
+  };
+  const BAYER4 = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5];
+
+  const out = [];
+  const u16 = (v) => { out.push(v & 0xff, (v >> 8) & 0xff); };
+  // ヘッダ + 論理スクリーン記述子 + グローバルカラーテーブル
+  for (const ch of "GIF89a") out.push(ch.charCodeAt(0));
+  u16(w); u16(h);
+  out.push(0xf7, 0, 0);
+  for (const p of palette) out.push(p[0], p[1], p[2]);
+  // ループ用 NETSCAPE 拡張
+  out.push(0x21, 0xff, 0x0b);
+  for (const ch of "NETSCAPE2.0") out.push(ch.charCodeAt(0));
+  out.push(0x03, 0x01, 0x00, 0x00, 0x00);
+
+  for (const fr of frames) {
+    const d = fr.data;
+    const indices = new Uint8Array(d.length / 4);
+    for (let p = 0, i = 0; p < d.length; p += 4, i++) {
+      // 軽いベイヤーディザでバンディングを抑える
+      const x = i % w, y = (i / w) | 0;
+      const dth = (BAYER4[(y & 3) * 4 + (x & 3)] - 7.5) * 1.4;
+      const r = Math.max(0, Math.min(255, d[p] + dth));
+      const g = Math.max(0, Math.min(255, d[p + 1] + dth));
+      const b = Math.max(0, Math.min(255, d[p + 2] + dth));
+      indices[i] = nearest(r | 0, g | 0, b | 0);
+    }
+    // グラフィック制御拡張（遅延）+ 画像記述子
+    out.push(0x21, 0xf9, 0x04, 0x04);
+    u16(delayCs);
+    out.push(0x00, 0x00);
+    out.push(0x2c);
+    u16(0); u16(0); u16(w); u16(h);
+    out.push(0x00);
+    out.push(8); // LZW最小コードサイズ
+    const lzw = lzwEncode(indices, 8);
+    for (let i = 0; i < lzw.length; i += 255) {
+      const chunk = lzw.slice(i, i + 255);
+      out.push(chunk.length, ...chunk);
+    }
+    out.push(0x00);
+  }
+  out.push(0x3b);
+  return new Uint8Array(out);
+}
+
+const gifBtn = document.getElementById("btn-gif");
+async function exportGif() {
+  if (slides.length < 1 || seqPlaying || !originalData) return;
+  setPreviewMode(false);
+  gifBtn.disabled = true;
+  transBtn.disabled = true;
+  try {
+    const fps = 15;
+    const n = slides.length;
+    const holdMs = seqState.hold * 1000;
+    const transMs = seqState.trans * 1000;
+    const total = n * holdMs + (n - 1) * transMs;
+    const count = Math.min(240, Math.max(2, Math.round((total / 1000) * fps)));
+
+    let sx = 0, sy = 0, sw = canvas.width, sh = canvas.height;
+    if (exportRatio) {
+      const imgR = sw / sh;
+      if (exportRatio > imgR) { sh = Math.round(sw / exportRatio); sy = (canvas.height - sh) >> 1; }
+      else { sw = Math.round(sh * exportRatio); sx = (canvas.width - sw) >> 1; }
+    }
+    const scale = Math.min(1, 480 / Math.max(sw, sh));
+    const ow = Math.max(2, Math.round((sw * scale) / 2) * 2);
+    const oh = Math.max(2, Math.round((sh * scale) / 2) * 2);
+    const oc = document.createElement("canvas");
+    oc.width = ow; oc.height = oh;
+    const octx = oc.getContext("2d", { willReadFrequently: true });
+
+    const frames = [];
+    for (let f = 0; f < count; f++) {
+      const tMs = (f / fps) * 1000;
+      const s = seqAt(Math.min(tMs, total), n, holdMs, transMs, seqState.zoom);
+      seqFrame = {
+        texA: slides[s.a].tex, texB: slides[s.b].tex,
+        t: s.t, zoomA: s.zoomA, zoomB: s.zoomB,
+      };
+      render(tMs / 1000); // 仮想時刻。ウィンドウが隠れていても進む
+      octx.drawImage(canvas, sx, sy, sw, sh, 0, 0, ow, oh);
+      frames.push(octx.getImageData(0, 0, ow, oh));
+      if (f % 6 === 5) {
+        gifBtn.textContent = `描画中 ${f + 1}/${count}`;
+        await new Promise((r) => setTimeout(r));
+      }
+    }
+    seqFrame = null;
+    markDirty();
+
+    gifBtn.textContent = "エンコード中…";
+    await new Promise((r) => setTimeout(r));
+    const gif = encodeGif(frames, ow, oh, Math.round(100 / fps));
+
+    const blob = new Blob([gif], { type: "image/gif" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `noizlab_${Date.now()}.gif`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    transNote.textContent = `GIFで保存しました（${ow}×${oh} / ${count}コマ / ${(blob.size / 1024 / 1024).toFixed(1)}MB）。Xにそのまま投稿できます。`;
+  } catch (e) {
+    transNote.textContent = "GIFの書き出しに失敗しました。";
+  } finally {
+    seqFrame = null;
+    markDirty();
+    gifBtn.textContent = "◉ GIF書き出し";
+    gifBtn.disabled = slides.length < 1;
+    transBtn.disabled = slides.length < 1;
+  }
+}
+gifBtn.addEventListener("click", exportGif);
 
 // ---- レシピURL共有（現在の設定をURLハッシュにシリアライズ）
 const b64urlEncode = (str) =>

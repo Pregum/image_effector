@@ -42,6 +42,46 @@ function authed(req, env) {
   return req.headers.get("x-gallery-key") === env.GALLERY_KEY;
 }
 
+// --- 画像URLの署名 ---
+// <img>はヘッダを送れないため、キーの代わりに期限付き署名をクエリに載せる。
+// 署名鍵はGALLERY_KEYそのものではなく派生鍵（用途を分離する）。
+const IMG_SIG_TTL_MS = 6 * 60 * 60 * 1000;
+let signKeyPromise = null;
+
+function getSignKey(env) {
+  if (!signKeyPromise) {
+    signKeyPromise = (async () => {
+      const enc = new TextEncoder();
+      const base = await crypto.subtle.importKey(
+        "raw", enc.encode(env.GALLERY_KEY || "no-key"),
+        { name: "HMAC", hash: "SHA-256" }, false, ["sign"]
+      );
+      const derived = await crypto.subtle.sign("HMAC", base, enc.encode("img-sign-v1"));
+      return crypto.subtle.importKey(
+        "raw", derived, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]
+      );
+    })();
+  }
+  return signKeyPromise;
+}
+
+async function signImage(env, id, exp) {
+  const key = await getSignKey(env);
+  const mac = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(`${id}:${exp}`));
+  return [...new Uint8Array(mac)].slice(0, 16)
+    .map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+async function verifyImageSig(env, id, exp, sig) {
+  const e = Number(exp);
+  if (!Number.isFinite(e) || e < Date.now()) return false;
+  const expect = await signImage(env, id, exp);
+  if (typeof sig !== "string" || sig.length !== expect.length) return false;
+  let diff = 0;
+  for (let i = 0; i < expect.length; i++) diff |= expect.charCodeAt(i) ^ sig.charCodeAt(i);
+  return diff === 0;
+}
+
 // --- AI予算ガード ---
 // Workers AIの無料枠は10,000ニューロン/日。その手前(80%)で自分から止めることで、
 // 万一アカウントが有料プランだったとしても従量課金の領域に入らない。
@@ -218,11 +258,13 @@ async function saveWork(req, env, ctx) {
 async function listWorks(req, env) {
   if (!authed(req, env)) return json({ error: "unauthorized" }, 401);
   const { results } = await env.DB.prepare(
-    `SELECT id, created_at, prompt, recipe, width, height, caption, embedding, parent_a, parent_b
+    `SELECT id, created_at, prompt, recipe, width, height, caption, embedding, parent_a, parent_b, shared
      FROM works ORDER BY created_at DESC LIMIT 200`
   ).all();
-  return json({
-    works: results.map((r) => {
+  // <img>用の期限付き署名を作品ごとに添える
+  const exp = String(Date.now() + IMG_SIG_TTL_MS);
+  const works = await Promise.all(
+    results.map(async (r) => {
       let recipe = null;
       let embedding = null;
       try { recipe = JSON.parse(r.recipe); } catch { /* 壊れた行でも一覧は返す */ }
@@ -236,20 +278,55 @@ async function listWorks(req, env) {
         caption: r.caption,
         parent_a: r.parent_a,
         parent_b: r.parent_b,
+        shared_until: Number(r.shared) || 0,
+        sig: await signImage(env, r.id, exp),
         recipe,
         embedding,
       };
-    }),
-  });
+    })
+  );
+  return json({ works, imgExp: exp });
 }
 
-async function getWorkImage(env, id, kind) {
+// 画像は既定で非公開。所有者は署名付きURL(またはキー)で、
+// 共有中の作品だけが期限内に限り誰でも見られる。
+async function getWorkImage(req, env, url, id, kind) {
+  const priv = { "cache-control": "private, no-store" };
+  let cache = priv["cache-control"];
+  let allowed = false;
+
+  const sig = url.searchParams.get("s");
+  const exp = url.searchParams.get("e");
+  if (sig && exp && (await verifyImageSig(env, id, exp, sig))) {
+    allowed = true;
+  } else if (authed(req, env)) {
+    allowed = true;
+  } else {
+    // 共有中かどうかはDBを引く（署名がある通常利用ではここまで来ない）
+    const row = await env.DB.prepare("SELECT shared FROM works WHERE id = ?").bind(id).first();
+    const until = Number(row?.shared) || 0;
+    const remain = Math.floor((until - Date.now()) / 1000);
+    if (remain > 0) {
+      allowed = true;
+      // 共有期限を超えてキャッシュに残らないようにする
+      cache = `public, max-age=${Math.min(remain, 3600)}`;
+    }
+  }
+
+  if (!allowed) return new Response(JSON.stringify({ error: "unauthorized" }), {
+    status: 401,
+    headers: { "content-type": "application/json", ...priv },
+  });
+
   const obj = await env.IMAGES.get(`works/${id}/${kind}`);
-  if (!obj) return json({ error: "not found" }, 404);
+  if (!obj) return new Response(JSON.stringify({ error: "not found" }), {
+    status: 404,
+    headers: { "content-type": "application/json", ...priv },
+  });
   return new Response(obj.body, {
     headers: {
       "content-type": obj.httpMetadata?.contentType || "image/webp",
-      "cache-control": "public, max-age=31536000, immutable",
+      "cache-control": cache,
     },
   });
 }
@@ -486,7 +563,7 @@ export default {
     const m = pathname.match(/^\/api\/works\/([0-9a-f-]{36})(?:\/(source|thumb|embed))?$/);
     if (m) {
       if (req.method === "GET" && (m[2] === "source" || m[2] === "thumb")) {
-        return getWorkImage(env, m[1], m[2]);
+        return getWorkImage(req, env, url, m[1], m[2]);
       }
       if (req.method === "POST" && m[2] === "embed") return embedRoute(req, env, m[1]);
       if (req.method === "DELETE" && !m[2]) return deleteWork(req, env, m[1]);

@@ -2427,6 +2427,12 @@ async function saveToGallery() {
 btnStore.addEventListener("click", saveToGallery);
 
 let lastWorks = [];
+// 画像は既定で非公開。一覧取得時に受け取る期限付き署名をURLに付けて読む
+let imgExp = "0";
+let sigRetried = false;
+const workImgUrl = (w, kind) =>
+  `/api/works/${w.id}/${kind}?e=${encodeURIComponent(imgExp)}&s=${encodeURIComponent(w.sig || "")}`;
+const keyHeaders = () => ({ "x-gallery-key": galleryKey() });
 
 async function refreshGallery() {
   if (!galleryKey()) {
@@ -2443,8 +2449,12 @@ async function refreshGallery() {
       return;
     }
     if (!res.ok) throw new Error(String(res.status));
-    const { works } = await res.json();
+    const { works, imgExp: exp } = await res.json();
     lastWorks = works;
+    if (exp) {
+      imgExp = String(exp);
+      sigRetried = false; // 新しい署名を取り直せたのでリトライ枠を戻す
+    }
     galleryGrid.innerHTML = "";
     if (!works.length) {
       setGalleryNote("まだ作品がありません。「ギャラリーへ保存」で追加できます。");
@@ -2458,9 +2468,16 @@ async function refreshGallery() {
       const label = `${dt.getMonth() + 1}/${dt.getDate()} ` +
         `${String(dt.getHours()).padStart(2, "0")}:${String(dt.getMinutes()).padStart(2, "0")}`;
       el.innerHTML =
-        `<img loading="lazy" src="/api/works/${w.id}/thumb" alt="" />` +
+        `<img loading="lazy" src="${workImgUrl(w, "thumb")}" alt="" />` +
         `<div class="work-meta"><span>${label}</span><button class="work-del" title="削除">✕</button></div>`;
-      el.querySelector("img").addEventListener("click", () => loadWork(w));
+      const imgEl = el.querySelector("img");
+      imgEl.addEventListener("click", () => loadWork(w));
+      // 署名の期限切れ（長時間開きっぱなし）なら一度だけ取り直す
+      imgEl.addEventListener("error", () => {
+        if (sigRetried) return;
+        sigRetried = true;
+        refreshGallery();
+      });
       el.querySelector(".work-del").addEventListener("click", async (e) => {
         e.stopPropagation();
         await fetch(`/api/works/${w.id}`, {
@@ -2484,7 +2501,7 @@ async function loadWork(w) {
     seed = w.recipe.seed ?? 1;
     syncUI();
     applyTextRecipe(w.recipe.text);
-    const res = await fetch(`/api/works/${w.id}/source`);
+    const res = await fetch(`/api/works/${w.id}/source`, { headers: keyHeaders() });
     if (!res.ok) throw new Error(String(res.status));
     await loadBlob(await res.blob());
     closeGallery();
@@ -2537,11 +2554,15 @@ function buildGraph() {
   const prev = new Map(gNodes.map((n) => [n.id, n]));
   gNodes = works.map((w) => {
     let img = thumbCache.get(w.id);
+    const url = workImgUrl(w, "thumb");
     if (!img) {
       img = new Image();
-      img.src = `/api/works/${w.id}/thumb`;
+      img.src = url;
       thumbCache.set(w.id, img);
+    } else if (img.dataset?.url !== url && !img.complete) {
+      img.src = url; // 署名が更新されていたら読み直す
     }
+    if (img.dataset) img.dataset.url = url;
     const old = prev.get(w.id);
     if (old) return Object.assign(old, { work: w });
     return {
@@ -2866,7 +2887,7 @@ async function spawnChild(recipe, baseWork, parents) {
     seed = recipe.seed ?? Math.random() * 100;
     syncUI();
     applyTextRecipe(recipe.text);
-    const res = await fetch(`/api/works/${baseWork.id}/source`);
+    const res = await fetch(`/api/works/${baseWork.id}/source`, { headers: keyHeaders() });
     if (!res.ok) throw new Error(String(res.status));
     await loadBlob(await res.blob());
     pendingParents = parents;

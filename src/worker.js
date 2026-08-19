@@ -625,6 +625,24 @@ async function suggestRoute(req, env, ai) {
   }
 }
 
+// 静的HTMLのog:url/og:imageを、実際に配信しているoriginの絶対URLに書き換える。
+// これによりfork先でも設定なしで正しいOGPになる。
+function rewriteOgp(res, origin) {
+  if (!(res.headers.get("content-type") || "").includes("text/html")) return res;
+  // HTMLRewriterはセレクタリスト(カンマ区切り)に対応しないため個別に登録する
+  const absolutize = {
+    element(el) {
+      const c = el.getAttribute("content");
+      if (c && c.startsWith("/")) el.setAttribute("content", origin + c);
+    },
+  };
+  return new HTMLRewriter()
+    .on('meta[property="og:url"]', absolutize)
+    .on('meta[property="og:image"]', absolutize)
+    .on('meta[name="twitter:image"]', absolutize)
+    .transform(res);
+}
+
 export default {
   async fetch(req, env, ctx) {
     const url = new URL(req.url);
@@ -688,6 +706,7 @@ export default {
       if (req.method === "DELETE" && !m[2]) return deleteWork(req, env, m[1]);
     }
 
-    return env.ASSETS.fetch(req);
+    // OGPの絶対URLはデプロイ先で変わるため、配信時にoriginを埋める
+    return rewriteOgp(await env.ASSETS.fetch(req), url.origin);
   },
 };

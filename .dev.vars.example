@@ -1,0 +1,25 @@
+# ローカル開発用の環境変数（wrangler dev が読み込む）
+# 本番は `npx wrangler secret put <名前>` で設定する
+
+# ギャラリー機能のアクセスキー（任意の長い文字列）。
+# 未設定ならギャラリー機能は自動的に無効になる。
+GALLERY_KEY=change-me-to-a-long-random-string
+
+# --- AIプロバイダ ---
+# workers-ai (既定) | openai | none
+# AI_PROVIDER=openai
+
+# OpenAI互換エンドポイント（Ollama / LM Studio / vLLM / LiteLLM / OpenAI本家）
+# 例: Ollama をローカルで動かす場合（wrangler dev なら localhost に届く）
+# AI_BASE_URL=http://localhost:11434/v1
+# AI_API_KEY=ollama
+
+# モデル名（省略時はプロバイダごとの既定値）
+# AI_MODEL_CHAT=llama3.3
+# AI_MODEL_CHAT_SMALL=llama3.2
+# AI_MODEL_IMAGE=dall-e-3
+# AI_MODEL_VISION=llava
+# AI_MODEL_EMBED=bge-m3
+
+# 1日あたりのAI予算（Workers AIの無料枠10,000ニューロンの手前で止める）
+# AI_DAILY_CAP=8000

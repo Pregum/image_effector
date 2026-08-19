@@ -4,7 +4,9 @@
   "compatibility_date": "2026-07-01",
   "assets": {
     "directory": "public",
-    "binding": "ASSETS"
+    "binding": "ASSETS",
+    // OGPの絶対URLを配信時に埋めるため、HTMLの2ページだけWorkerを先に通す
+    "run_worker_first": ["/", "/about"]
   },
   "ai": {
     "binding": "AI"

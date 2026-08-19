@@ -57,13 +57,17 @@ uniform float u_t;     // 0=A → 1=B
 uniform int u_mode;    // 0:fade 1:wipe 2:dissolve 3:glitch
 uniform vec2 u_res;
 uniform float u_seed2;
+uniform float u_zoomA; // Ken Burnsズーム倍率（1で等倍）
+uniform float u_zoomB;
 float th(float n) { return fract(sin(n * 127.1 + u_seed2 * 311.7) * 43758.5453); }
 float th2(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7)) + u_seed2 * 17.0) * 43758.5453); }
+vec4 sA(vec2 p) { return texture(u_a, clamp(0.5 + (p - 0.5) / u_zoomA, 0.0, 1.0)); }
+vec4 sB(vec2 p) { return texture(u_b, clamp(0.5 + (p - 0.5) / u_zoomB, 0.0, 1.0)); }
 void main() {
   vec2 uv = v_uv;
   float t = clamp(u_t, 0.0, 1.0);
-  vec4 A = texture(u_a, uv);
-  vec4 B = texture(u_b, uv);
+  vec4 A = sA(uv);
+  vec4 B = sB(uv);
   if (u_mode == 0) {
     o = mix(A, B, smoothstep(0.0, 1.0, t));
   } else if (u_mode == 1) {
@@ -81,11 +85,11 @@ void main() {
     float amt = exp(-d * 14.0) * p;
     vec2 duv = clamp(uv + vec2(jit * amt * 0.35, 0.0), 0.0, 1.0);
     float m = step(duv.x, edge);
-    o = mix(texture(u_a, duv), texture(u_b, duv), m);
+    o = mix(sA(duv), sB(duv), m);
     vec2 ruv = clamp(duv + vec2(amt * 0.03, 0.0), 0.0, 1.0);
     vec2 buv = clamp(duv - vec2(amt * 0.03, 0.0), 0.0, 1.0);
-    o.r = mix(texture(u_a, ruv), texture(u_b, ruv), m).r;
-    o.b = mix(texture(u_a, buv), texture(u_b, buv), m).b;
+    o.r = mix(sA(ruv), sB(ruv), m).r;
+    o.b = mix(sA(buv), sB(buv), m).b;
   }
 }`;
 
@@ -751,7 +755,7 @@ function setSourceImage(imgLike, w, h) {
   allocFbos(W, H);
   compositeSource();
   updateTextTexture();
-  uploadTransB(); // 画像Bは新しい解像度に合わせて再クロップ
+  uploadAllSlides(); // カット列は新しい解像度に合わせて再クロップ
   document.getElementById("status-res").textContent = `${W} × ${H} px`;
   document.getElementById("drop-hint").style.display = "none";
   requestAnimationFrame(updateCropGuide);
@@ -1009,94 +1013,192 @@ document.getElementById("btn-save").addEventListener("click", () => {
   }, "image/png");
 });
 
-// ---------------------------------------------------------------- トランジション動画
+// ---------------------------------------------------------------- ショート動画（カット列＋トランジション）
 
-const texB = makeTex();
-let transBBitmap = null;
-let transBReady = false;
-let transT = null;      // 再生中の遷移位置 0..1（null=通常表示）
-let transPlaying = null;
-const transState = { mode: 0, duration: 2.5 };
+const MAX_SLIDES = 8;
+const slides = []; // {bmp, tex, thumb}
+const seqState = { mode: 3, hold: 1.0, trans: 0.6, zoom: true };
+let seqPlaying = null; // {start, hold, trans, blit, onend}
+let seqFrame = null;   // 再生中のフレーム情報 {texA, texB, t, zoomA, zoomB}
 const transBtn = document.getElementById("btn-transition");
 const transNote = document.getElementById("trans-note");
+const slideStrip = document.getElementById("slide-strip");
 
-function uploadTransB() {
-  if (!transBBitmap || !W || !H) return;
-  // 画像Aの解像度にカバークロップして揃える
+// 経過時間から「どのカット同士を、どの遷移位置・ズームで描くか」を純粋計算する
+function seqAt(elapsed, n, holdMs, transMs, zoomOn) {
+  const per = holdMs + transMs;
+  const i = Math.min(n - 1, Math.floor(elapsed / per));
+  let t = 0;
+  const inSeg = elapsed - i * per;
+  if (i < n - 1 && inSeg > holdMs) t = Math.min(1, (inSeg - holdMs) / transMs);
+  const zprog = (k) =>
+    Math.min(1, Math.max(0, (elapsed - k * per + transMs) / (holdMs + 2 * transMs)));
+  const zf = (k) =>
+    !zoomOn ? 1 : k % 2 === 0 ? 1 + 0.08 * zprog(k) : 1.08 - 0.08 * zprog(k);
+  const j = Math.min(n - 1, i + 1);
+  return { a: i, b: j, t, zoomA: zf(i), zoomB: zf(j) };
+}
+
+function uploadSlide(s) {
+  if (!s.bmp || !W || !H) return;
+  // 編集画像の解像度にカバークロップして揃える
   const c = document.createElement("canvas");
   c.width = W;
   c.height = H;
   const ctx = c.getContext("2d");
-  const s = Math.max(W / transBBitmap.width, H / transBBitmap.height);
-  const dw = transBBitmap.width * s;
-  const dh = transBBitmap.height * s;
-  ctx.drawImage(transBBitmap, (W - dw) / 2, (H - dh) / 2, dw, dh);
-  gl.bindTexture(gl.TEXTURE_2D, texB);
+  const sc = Math.max(W / s.bmp.width, H / s.bmp.height);
+  const dw = s.bmp.width * sc;
+  const dh = s.bmp.height * sc;
+  ctx.drawImage(s.bmp, (W - dw) / 2, (H - dh) / 2, dw, dh);
+  gl.bindTexture(gl.TEXTURE_2D, s.tex);
   gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
   gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, c);
   gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
 }
 
-function setTransB(bitmap) {
-  transBBitmap = bitmap;
-  uploadTransB();
-  transBReady = true;
-  transBtn.disabled = false;
-  transNote.textContent = "画像Bを設定しました。▶で A→B の動画を書き出します。";
+function uploadAllSlides() {
+  for (const s of slides) uploadSlide(s);
 }
 
+function seqTotalSec() {
+  return slides.length * seqState.hold + Math.max(0, slides.length - 1) * seqState.trans;
+}
+
+function updateSeqNote() {
+  transBtn.disabled = slides.length < 1 || !!seqPlaying;
+  transNote.textContent = slides.length
+    ? `${slides.length}カット / 約${seqTotalSec().toFixed(1)}秒の動画になります。`
+    : "「＋ 今の画像」でカットを並べてください。";
+}
+
+function renderSlideStrip() {
+  slideStrip.innerHTML = "";
+  slides.forEach((s, i) => {
+    const d = document.createElement("div");
+    d.className = "slide-item";
+    d.innerHTML =
+      `<img src="${s.thumb}" alt="カット${i + 1}" />` +
+      `<button class="work-del" title="削除">✕</button><span class="slide-num">${i + 1}</span>`;
+    d.querySelector("button").addEventListener("click", () => {
+      gl.deleteTexture(slides[i].tex);
+      slides.splice(i, 1);
+      renderSlideStrip();
+    });
+    slideStrip.appendChild(d);
+  });
+  updateSeqNote();
+}
+
+async function addSlideBitmap(bmp) {
+  if (slides.length >= MAX_SLIDES) {
+    transNote.textContent = `カットは最大${MAX_SLIDES}枚までです。`;
+    return;
+  }
+  const s = { bmp, tex: makeTex(), thumb: null };
+  uploadSlide(s);
+  const tc = document.createElement("canvas");
+  tc.width = 96;
+  tc.height = 64;
+  const g2 = tc.getContext("2d");
+  const sc = Math.max(96 / bmp.width, 64 / bmp.height);
+  g2.drawImage(bmp, (96 - bmp.width * sc) / 2, (64 - bmp.height * sc) / 2, bmp.width * sc, bmp.height * sc);
+  s.thumb = tc.toDataURL();
+  slides.push(s);
+  renderSlideStrip();
+}
+
+document.getElementById("slide-add").addEventListener("click", async () => {
+  if (!originalData) return;
+  addSlideBitmap(await createImageBitmap(originalData));
+});
 const transbInput = document.getElementById("transb-input");
-document.getElementById("transb-open").addEventListener("click", () => transbInput.click());
+document.getElementById("slide-add-file").addEventListener("click", () => transbInput.click());
 transbInput.addEventListener("change", async () => {
   const f = transbInput.files[0];
   transbInput.value = "";
   if (!f) return;
   try {
-    setTransB(await createImageBitmap(f));
+    addSlideBitmap(await createImageBitmap(f));
   } catch {
-    transNote.textContent = "画像Bを読み込めませんでした。";
+    transNote.textContent = "画像を読み込めませんでした。";
   }
-});
-document.getElementById("transb-current").addEventListener("click", async () => {
-  if (!originalData) return;
-  setTransB(await createImageBitmap(originalData));
 });
 
 document.getElementById("trans-mode-seg").querySelectorAll("button").forEach((b, i) => {
   b.addEventListener("click", () => {
-    transState.mode = i;
+    seqState.mode = i;
     document.getElementById("trans-mode-seg").querySelectorAll("button")
       .forEach((v) => v.classList.remove("sel"));
     b.classList.add("sel");
   });
 });
+document.getElementById("slide-hold").addEventListener("input", (e) => {
+  seqState.hold = +e.target.value;
+  document.getElementById("slide-hold-val").textContent = `${seqState.hold.toFixed(2)}s`;
+  updateSeqNote();
+});
 document.getElementById("trans-duration").addEventListener("input", (e) => {
-  transState.duration = +e.target.value;
-  document.getElementById("trans-duration-val").textContent = `${transState.duration.toFixed(1)}s`;
+  seqState.trans = +e.target.value;
+  document.getElementById("trans-duration-val").textContent = `${seqState.trans.toFixed(1)}s`;
+  updateSeqNote();
+});
+document.getElementById("chk-zoom").addEventListener("change", (e) => {
+  seqState.zoom = e.target.checked;
 });
 
-async function exportTransition() {
-  if (!transBReady || !originalData || transPlaying) return;
+async function exportSequence() {
+  if (slides.length < 1 || seqPlaying || !originalData) return;
   transBtn.disabled = true;
   transBtn.textContent = "録画中…";
   try {
-    const stream = canvas.captureStream(30);
-    const mime = ["video/webm;codecs=vp9", "video/webm;codecs=vp8", "video/webm", "video/mp4"]
-      .find((m) => window.MediaRecorder && MediaRecorder.isTypeSupported(m));
+    // 書き出し比率で中央クロップし、長辺1280・偶数サイズ(H.264要件)へスケール
+    let sx = 0, sy = 0, sw = canvas.width, sh = canvas.height;
+    if (exportRatio) {
+      const imgR = sw / sh;
+      if (exportRatio > imgR) {
+        sh = Math.round(sw / exportRatio);
+        sy = (canvas.height - sh) >> 1;
+      } else {
+        sw = Math.round(sh * exportRatio);
+        sx = (canvas.width - sw) >> 1;
+      }
+    }
+    const scaleOut = 1280 / Math.max(sw, sh);
+    const ow = Math.round((sw * scaleOut) / 2) * 2;
+    const oh = Math.round((sh * scaleOut) / 2) * 2;
+    const crop = document.createElement("canvas");
+    crop.width = ow;
+    crop.height = oh;
+    const cctx = crop.getContext("2d");
+
+    const stream = crop.captureStream(30);
+    // リール等でそのまま使えるMP4(H.264)を最優先、非対応環境はWebMへ
+    const mime = [
+      "video/mp4;codecs=avc1.42E01E",
+      "video/mp4",
+      "video/webm;codecs=vp9",
+      "video/webm;codecs=vp8",
+      "video/webm",
+    ].find((m) => window.MediaRecorder && MediaRecorder.isTypeSupported(m));
     if (!mime) throw new Error("MediaRecorder unsupported");
-    const rec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 8_000_000 });
+    const rec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 10_000_000 });
     const chunks = [];
     rec.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
     const stopped = new Promise((res) => (rec.onstop = res));
     rec.start(200);
-    // 前後0.6秒ずつホールドし、間を遷移させながらリアルタイム録画する
-    transPlaying = { start: performance.now(), hold: 600, durMs: transState.duration * 1000 };
+
+    seqPlaying = {
+      start: performance.now(),
+      hold: seqState.hold * 1000,
+      trans: seqState.trans * 1000,
+      blit: () => cctx.drawImage(canvas, sx, sy, sw, sh, 0, 0, ow, oh),
+    };
     markDirty();
     // ウィンドウが隠れるとrAFが止まり進行しないため、タイムアウトで中断する
-    const totalMs = 600 + transState.duration * 1000 + 600;
+    const totalMs = seqTotalSec() * 1000 + 400;
     const finished = await Promise.race([
-      new Promise((res) => (transPlaying.onend = () => res(true))),
-      new Promise((res) => setTimeout(() => res(false), totalMs + 4000)),
+      new Promise((res) => (seqPlaying.onend = () => res(true))),
+      new Promise((res) => setTimeout(() => res(false), totalMs + 5000)),
     ]);
     rec.stop();
     await stopped;
@@ -1104,24 +1206,28 @@ async function exportTransition() {
       transNote.textContent = "書き出しがタイムアウトしました。録画中はこのウィンドウを前面に表示したままにしてください。";
       return;
     }
+    const isMp4 = (rec.mimeType || mime).includes("mp4");
     const blob = new Blob(chunks, { type: mime.split(";")[0] });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
-    a.download = `noizlab_transition_${Date.now()}.${mime.includes("mp4") ? "mp4" : "webm"}`;
+    a.download = `noizlab_video_${Date.now()}.${isMp4 ? "mp4" : "webm"}`;
     a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 5000);
-    transNote.textContent = "動画を保存しました。Xに投稿する場合はMP4/GIF変換が必要です。";
+    transNote.textContent = isMp4
+      ? `MP4で保存しました（${ow}×${oh}）。そのままリール/ショートに使えます。`
+      : `WebMで保存しました（${ow}×${oh}）。投稿先によってはMP4変換が必要です。`;
   } catch {
-    transNote.textContent = "動画の書き出しに失敗しました（Safariは非対応の場合があります）。";
+    transNote.textContent = "動画の書き出しに失敗しました（Safariでは非対応の場合があります）。";
   } finally {
-    transPlaying = null;
-    transT = null;
+    seqPlaying = null;
+    seqFrame = null;
     markDirty();
-    transBtn.disabled = !transBReady;
-    transBtn.textContent = "▶ WebM書き出し";
+    transBtn.textContent = "▶ 動画書き出し";
+    // 結果メッセージを残すため、ここではボタン状態のみ戻す
+    transBtn.disabled = slides.length < 1;
   }
 }
-transBtn.addEventListener("click", exportTransition);
+transBtn.addEventListener("click", exportSequence);
 
 document.getElementById("btn-share").addEventListener("click", () => {
   const text = "NOIZ LAB で画像にエフェクトをかけた🎛️";
@@ -1561,22 +1667,24 @@ function render(time) {
 
   let base = srcTex;
 
-  // トランジション再生中は A→B を合成したものをソースとして流す
-  if (transT !== null && transBReady) {
+  // シーケンス再生中はカット同士を合成したものをソースとして流す
+  if (seqFrame) {
     gl.useProgram(transP.prog);
     gl.bindFramebuffer(gl.FRAMEBUFFER, fboT.fbo);
     gl.viewport(0, 0, W, H);
     gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, srcTex);
+    gl.bindTexture(gl.TEXTURE_2D, seqFrame.texA);
     gl.activeTexture(gl.TEXTURE1);
-    gl.bindTexture(gl.TEXTURE_2D, texB);
+    gl.bindTexture(gl.TEXTURE_2D, seqFrame.texB);
     const tu = transP.u;
     gl.uniform1i(tu.u_a, 0);
     gl.uniform1i(tu.u_b, 1);
-    gl.uniform1f(tu.u_t, transT);
-    gl.uniform1i(tu.u_mode, transState.mode);
+    gl.uniform1f(tu.u_t, seqFrame.t);
+    gl.uniform1i(tu.u_mode, seqState.mode);
     gl.uniform2f(tu.u_res, W, H);
     gl.uniform1f(tu.u_seed2, seed);
+    gl.uniform1f(tu.u_zoomA, seqFrame.zoomA);
+    gl.uniform1f(tu.u_zoomB, seqFrame.zoomB);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     base = fboT.tex;
   }
@@ -1644,14 +1752,22 @@ function render(time) {
 }
 
 function frame() {
-  if (transPlaying) {
-    const el = performance.now() - transPlaying.start;
-    const total = transPlaying.hold + transPlaying.durMs + transPlaying.hold;
-    transT = Math.min(1, Math.max(0, (el - transPlaying.hold) / transPlaying.durMs));
+  if (seqPlaying && slides.length) {
+    const el = performance.now() - seqPlaying.start;
+    const n = slides.length;
+    const total = n * seqPlaying.hold + (n - 1) * seqPlaying.trans;
+    const s = seqAt(Math.min(el, total), n, seqPlaying.hold, seqPlaying.trans, seqState.zoom);
+    seqFrame = {
+      texA: slides[s.a].tex,
+      texB: slides[s.b].tex,
+      t: s.t,
+      zoomA: s.zoomA,
+      zoomB: s.zoomB,
+    };
     dirty = true;
-    if (el >= total && transPlaying.onend) {
-      const f = transPlaying.onend;
-      transPlaying.onend = null;
+    if (el >= total + 300 && seqPlaying.onend) {
+      const f = seqPlaying.onend;
+      seqPlaying.onend = null;
       f();
     }
   }
@@ -1660,6 +1776,7 @@ function frame() {
   if (dirty || needsAnim) {
     render(animate ? performance.now() / 1000 : frozenTime);
     dirty = false;
+    if (seqPlaying?.blit) seqPlaying.blit();
   }
   requestAnimationFrame(frame);
 }

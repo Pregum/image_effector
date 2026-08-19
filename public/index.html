@@ -136,20 +136,26 @@
     </div>
 
     <div class="panel-section">
-      <h2 class="section-title">TRANSITION <span class="jp">／ 2枚をつなぐ動画</span></h2>
+      <h2 class="section-title">VIDEO <span class="jp">／ ショート動画</span></h2>
+      <div class="slide-strip" id="slide-strip"></div>
       <div class="ai-row">
-        <button id="transb-open" class="btn">画像Bを開く</button>
-        <button id="transb-current" class="btn">今の画像をBに</button>
+        <button id="slide-add" class="btn">＋ 今の画像</button>
+        <button id="slide-add-file" class="btn">＋ ファイル</button>
       </div>
       <div class="seg" id="trans-mode-seg">
-        <button class="sel">フェード</button><button>ワイプ</button><button>ディゾルブ</button><button>グリッチ</button>
+        <button>フェード</button><button>ワイプ</button><button>ディゾルブ</button><button class="sel">グリッチ</button>
       </div>
       <div class="ctl">
-        <div class="ctl-label"><span>切替の長さ</span><span class="val" id="trans-duration-val">2.5s</span></div>
-        <input type="range" id="trans-duration" min="1" max="5" step="0.5" value="2.5" />
+        <div class="ctl-label"><span>各カットの表示</span><span class="val" id="slide-hold-val">1.00s</span></div>
+        <input type="range" id="slide-hold" min="0.3" max="3" step="0.05" value="1" />
       </div>
-      <button id="btn-transition" class="btn btn-primary trans-export" disabled>▶ WebM書き出し</button>
-      <p class="text-hint" id="trans-note">画像A=現在の編集画像。Bを設定すると A→B の動画を書き出せます（エフェクトは全体にかかります）。</p>
+      <div class="ctl">
+        <div class="ctl-label"><span>切替の長さ</span><span class="val" id="trans-duration-val">0.6s</span></div>
+        <input type="range" id="trans-duration" min="0.2" max="2" step="0.1" value="0.6" />
+      </div>
+      <label class="anim-toggle"><input type="checkbox" id="chk-zoom" checked /> ズーム演出 (Ken Burns)</label>
+      <button id="btn-transition" class="btn btn-primary trans-export" disabled>▶ 動画書き出し</button>
+      <p class="text-hint" id="trans-note">「＋ 今の画像」でカットを並べ、下の書き出し比率（9:16など）を選んで書き出し。エフェクトと文字は動画全体にかかります。</p>
     </div>
 
     <div class="panel-section">

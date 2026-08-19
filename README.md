@@ -4,6 +4,7 @@
 Cloudflare Workers (静的アセット + Workers AI) でホスティングしています。
 
 **URL**: https://image-effector.pregum-dev.workers.dev
+**説明ページ**: https://image-effector.pregum-dev.workers.dev/about
 
 ![demo](docs/demo.gif)
 

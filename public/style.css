@@ -434,6 +434,17 @@ input[type="range"]::-moz-range-thumb {
   font-size: 10.5px;
   color: #5a6150;
 }
+.about-link {
+  display: inline-block;
+  margin-top: 8px;
+  color: var(--ink-dim);
+  font-family: var(--font-dot);
+  font-size: 11.5px;
+  letter-spacing: 1px;
+  text-decoration: none;
+  border-bottom: 1px solid var(--line-hi);
+}
+.about-link:hover { color: var(--acid); border-color: var(--acid); }
 
 /* ---- gallery ---- */
 .gallery-overlay {

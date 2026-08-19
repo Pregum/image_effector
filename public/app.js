@@ -528,7 +528,99 @@ document.getElementById("btn-random").addEventListener("click", () => {
 
 // ---------------------------------------------------------------- pixel sort
 
-let originalData = null; // ImageData（処理解像度）
+let originalData = null; // ImageData（処理解像度、重ね画像の合成後）
+let baseData = null;     // 重ね画像を載せる前のベース画像
+
+// ---- 重ね画像（ソース段階で合成し、エフェクトは合成後の全体にかかる）
+const OVERLAY_BLENDS = ["source-over", "screen", "multiply", "lighter"];
+const overlayState = { img: null, x: 0.7, y: 0.35, scale: 0.4, opacity: 1, blend: 0 };
+
+function compositeSource() {
+  if (!baseData) return;
+  if (!overlayState.img) {
+    originalData = baseData;
+    uploadSource();
+    return;
+  }
+  const c = document.createElement("canvas");
+  c.width = W;
+  c.height = H;
+  const ctx = c.getContext("2d");
+  ctx.putImageData(baseData, 0, 0);
+  const ow = W * overlayState.scale;
+  const oh = ow * (overlayState.img.height / overlayState.img.width);
+  ctx.globalAlpha = overlayState.opacity;
+  ctx.globalCompositeOperation = OVERLAY_BLENDS[overlayState.blend] || "source-over";
+  ctx.drawImage(
+    overlayState.img,
+    W * overlayState.x - ow / 2,
+    H * overlayState.y - oh / 2,
+    ow,
+    oh
+  );
+  originalData = ctx.getImageData(0, 0, W, H);
+  uploadSource();
+}
+
+let compositePending = false;
+function scheduleComposite() {
+  if (compositePending) return;
+  compositePending = true;
+  requestAnimationFrame(() => {
+    compositePending = false;
+    compositeSource();
+  });
+}
+
+const overlayInput = document.getElementById("overlay-input");
+document.getElementById("overlay-open").addEventListener("click", () => overlayInput.click());
+overlayInput.addEventListener("change", async () => {
+  const f = overlayInput.files[0];
+  overlayInput.value = "";
+  if (!f) return;
+  try {
+    overlayState.img = await createImageBitmap(f);
+    syncOverlayUI();
+    compositeSource();
+  } catch { /* 読み込めない画像は無視 */ }
+});
+document.getElementById("overlay-clear").addEventListener("click", () => {
+  overlayState.img = null;
+  syncOverlayUI();
+  compositeSource();
+});
+for (const key of ["scale", "opacity"]) {
+  const input = document.getElementById(`overlay-${key}`);
+  input.addEventListener("input", () => {
+    overlayState[key] = +input.value;
+    document.getElementById(`overlay-${key}-val`).textContent = (+input.value).toFixed(2);
+    scheduleComposite();
+  });
+}
+document.getElementById("overlay-blend-seg").querySelectorAll("button").forEach((b, i) => {
+  b.addEventListener("click", () => {
+    overlayState.blend = i;
+    document.getElementById("overlay-blend-seg").querySelectorAll("button")
+      .forEach((v) => v.classList.remove("sel"));
+    b.classList.add("sel");
+    scheduleComposite();
+  });
+});
+
+function syncOverlayUI() {
+  document.getElementById("overlay-clear").disabled = !overlayState.img;
+}
+
+// 指定クライアント座標が重ね画像の矩形内か（ドラッグ対象の判定用）
+function overlayHit(e) {
+  if (!overlayState.img) return false;
+  const r = canvas.getBoundingClientRect();
+  const px = (e.clientX - r.left) / r.width;
+  const py = (e.clientY - r.top) / r.height;
+  const wN = overlayState.scale;
+  const hN = wN * (overlayState.img.height / overlayState.img.width) * (W / H);
+  return Math.abs(px - overlayState.x) <= wN / 2 && Math.abs(py - overlayState.y) <= hN / 2;
+}
 
 function lumOf(d, i) {
   return d[i] * 0.299 + d[i + 1] * 0.587 + d[i + 2] * 0.114;
@@ -607,11 +699,14 @@ function setSourceImage(imgLike, w, h) {
   c.width = W; c.height = H;
   const ctx = c.getContext("2d");
   ctx.drawImage(imgLike, 0, 0, W, H);
-  originalData = ctx.getImageData(0, 0, W, H);
+  baseData = ctx.getImageData(0, 0, W, H);
+  // 新しいベース画像を読み込んだら重ね画像はリセット（二重焼き込み防止）
+  overlayState.img = null;
+  syncOverlayUI();
   canvas.width = W;
   canvas.height = H;
   allocFbos(W, H);
-  uploadSource();
+  compositeSource();
   updateTextTexture();
   document.getElementById("status-res").textContent = `${W} × ${H} px`;
   document.getElementById("drop-hint").style.display = "none";
@@ -726,20 +821,29 @@ for (const axis of ["x", "y"]) {
   });
 }
 
-// プレビュー上のドラッグで文字を移動
-let textDrag = false;
+// プレビュー上のドラッグで移動（重ね画像の上ならオーバーレイ、それ以外は文字）
+let dragTarget = null; // "overlay" | "text" | null
 let textTexPending = false;
 canvas.addEventListener("pointerdown", (e) => {
-  if (!textState.str.trim()) return;
-  textDrag = true;
+  if (overlayHit(e)) dragTarget = "overlay";
+  else if (textState.str.trim()) dragTarget = "text";
+  else return;
   canvas.setPointerCapture(e.pointerId);
   e.preventDefault();
 });
 canvas.addEventListener("pointermove", (e) => {
-  if (!textDrag) return;
+  if (!dragTarget) return;
   const r = canvas.getBoundingClientRect();
-  textState.x = Math.min(0.95, Math.max(0.05, (e.clientX - r.left) / r.width));
-  textState.y = Math.min(0.94, Math.max(0.06, (e.clientY - r.top) / r.height));
+  const px = (e.clientX - r.left) / r.width;
+  const py = (e.clientY - r.top) / r.height;
+  if (dragTarget === "overlay") {
+    overlayState.x = Math.min(1.1, Math.max(-0.1, px));
+    overlayState.y = Math.min(1.1, Math.max(-0.1, py));
+    scheduleComposite();
+    return;
+  }
+  textState.x = Math.min(0.95, Math.max(0.05, px));
+  textState.y = Math.min(0.94, Math.max(0.06, py));
   syncTextUI();
   if (!textTexPending) {
     textTexPending = true;
@@ -749,7 +853,7 @@ canvas.addEventListener("pointermove", (e) => {
     });
   }
 });
-canvas.addEventListener("pointerup", () => { textDrag = false; });
+canvas.addEventListener("pointerup", () => { dragTarget = null; });
 
 for (const [segId, key] of [
   ["text-font-seg", "font"],

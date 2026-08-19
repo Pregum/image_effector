@@ -31,6 +31,33 @@ function authed(req, env) {
   return req.headers.get("x-gallery-key") === env.GALLERY_KEY;
 }
 
+// 日本語などの非ASCIIプロンプトを画像モデル向けに英訳する（失敗時は原文のまま）
+async function translatePrompt(env, p) {
+  if (!/[^\x00-\x7F]/.test(p)) return p;
+  try {
+    const tr = await env.AI.run("@cf/meta/llama-3.1-8b-instruct-fp8", {
+      messages: [
+        {
+          role: "system",
+          content:
+            "Translate the user's image description into a concise English prompt for an image generation model. Reply with the prompt only, no quotes.",
+        },
+        { role: "user", content: p },
+      ],
+    });
+    return tr?.response?.trim() || p;
+  } catch {
+    return p;
+  }
+}
+
+// NOTE: img2img は2026-08時点で見送り。実地検証の結果:
+//  - @cf/runwayml/stable-diffusion-v1-5-img2img → 3040(容量超過)が恒常化
+//  - @cf/lykon/dreamshaper-8-lcm → 入力スキーマ(バイト配列)とバックエンド期待(shape[1])が不整合で破損
+//  - @cf/bytedance/stable-diffusion-xl-lightning → imageテンソル自体が非対応
+//  - FLUX.2 klein系 → ドル課金のPartnerモデルのため不採用（ニューロン枠外）
+// 無料枠内で使えるimg2imgモデルが復活したら再実装する。
+
 async function handleGenerate(req, env) {
   if (!(await rateLimit(env, clientIp(req), 5))) {
     return json({ error: "rate limited" }, 429);
@@ -47,25 +74,7 @@ async function handleGenerate(req, env) {
     return json({ error: "invalid prompt" }, 400);
   }
 
-  let p = prompt.trim();
-  // 日本語などの非ASCIIプロンプトは英語に翻訳してから画像生成に渡す
-  if (/[^\x00-\x7F]/.test(p)) {
-    try {
-      const tr = await env.AI.run("@cf/meta/llama-3.1-8b-instruct-fp8", {
-        messages: [
-          {
-            role: "system",
-            content:
-              "Translate the user's image description into a concise English prompt for an image generation model. Reply with the prompt only, no quotes.",
-          },
-          { role: "user", content: p },
-        ],
-      });
-      if (tr?.response?.trim()) p = tr.response.trim();
-    } catch {
-      // 翻訳失敗時は原文のまま生成を試みる
-    }
-  }
+  const p = await translatePrompt(env, prompt.trim());
 
   try {
     const out = await env.AI.run("@cf/black-forest-labs/flux-1-schnell", {

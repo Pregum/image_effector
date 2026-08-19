@@ -1,4 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
+import { getAiProvider } from "./ai.js";
 
 const WINDOW_MS = 60_000; // レート制限ウィンドウ幅
 
@@ -34,8 +35,18 @@ const json = (obj, status = 200) =>
 const clientIp = (req) => req.headers.get("cf-connecting-ip") || "unknown";
 
 async function rateLimit(env, key, limit) {
-  return env.LIMITER.get(env.LIMITER.idFromName(key)).check(limit);
+  // Durable Objectsを繋いでいない構成でも動くようにする
+  if (!env.LIMITER) return true;
+  try {
+    return await env.LIMITER.get(env.LIMITER.idFromName(key)).check(limit);
+  } catch {
+    return true;
+  }
 }
+
+// ギャラリー機能が構成されているか（DB・R2・キーが揃っているか）
+const galleryEnabled = (env) => !!(env.DB && env.IMAGES && env.GALLERY_KEY);
+const disabled = (what) => json({ error: "disabled", reason: what }, 503);
 
 function authed(req, env) {
   if (!env.GALLERY_KEY) return false;
@@ -85,7 +96,8 @@ async function verifyImageSig(env, id, exp, sig) {
 // --- AI予算ガード ---
 // Workers AIの無料枠は10,000ニューロン/日。その手前(80%)で自分から止めることで、
 // 万一アカウントが有料プランだったとしても従量課金の領域に入らない。
-const AI_DAILY_CAP = 8000;
+const DEFAULT_AI_DAILY_CAP = 8000;
+const aiDailyCap = (env) => Number(env.AI_DAILY_CAP) || DEFAULT_AI_DAILY_CAP;
 // 1呼び出しあたりのニューロン概算（公式の単価表からの見積り。安全側に多め)
 const AI_COST = {
   image: 120,   // flux-1-schnell 1024x1024 / 6ステップ
@@ -96,12 +108,13 @@ const AI_COST = {
 };
 
 async function spendAiBudget(env, cost) {
+  const cap = aiDailyCap(env);
   try {
     const stub = env.LIMITER.get(env.LIMITER.idFromName("ai-budget-global"));
-    return await stub.spendDaily(cost, AI_DAILY_CAP);
+    return await stub.spendDaily(cost, cap);
   } catch {
-    // 予算カウンタ自体が落ちている場合は通す（機能停止より継続を優先）
-    return { ok: true, used: 0, cap: AI_DAILY_CAP };
+    // 予算カウンタが無い/落ちている場合は通す（機能停止より継続を優先）
+    return { ok: true, used: 0, cap };
   }
 }
 
@@ -109,20 +122,16 @@ const budgetExceeded = () =>
   json({ error: "quota exceeded", reason: "daily-ai-budget" }, 503);
 
 // 日本語などの非ASCIIプロンプトを画像モデル向けに英訳する（失敗時は原文のまま）
-async function translatePrompt(env, p) {
+async function translatePrompt(ai, p) {
   if (!/[^\x00-\x7F]/.test(p)) return p;
   try {
-    const tr = await env.AI.run("@cf/meta/llama-3.1-8b-instruct-fp8", {
-      messages: [
-        {
-          role: "system",
-          content:
-            "Translate the user's image description into a concise English prompt for an image generation model. Reply with the prompt only, no quotes.",
-        },
-        { role: "user", content: p },
-      ],
+    const tr = await ai.chat({
+      system:
+        "Translate the user's image description into a concise English prompt for an image generation model. Reply with the prompt only, no quotes.",
+      user: p,
+      small: true,
     });
-    return tr?.response?.trim() || p;
+    return String(tr ?? "").trim() || p;
   } catch {
     return p;
   }
@@ -135,7 +144,7 @@ async function translatePrompt(env, p) {
 //  - FLUX.2 klein系 → ドル課金のPartnerモデルのため不採用（ニューロン枠外）
 // 無料枠内で使えるimg2imgモデルが復活したら再実装する。
 
-async function handleGenerate(req, env) {
+async function handleGenerate(req, env, ai) {
   if (!(await rateLimit(env, clientIp(req), 5))) {
     return json({ error: "rate limited" }, 429);
   }
@@ -153,16 +162,12 @@ async function handleGenerate(req, env) {
 
   if (!(await spendAiBudget(env, AI_COST.image + AI_COST.llm8b)).ok) return budgetExceeded();
 
-  const p = await translatePrompt(env, prompt.trim());
+  const p = await translatePrompt(ai, prompt.trim());
 
   try {
-    const out = await env.AI.run("@cf/black-forest-labs/flux-1-schnell", {
-      prompt: p,
-      steps: 6,
-    });
-    const bin = Uint8Array.from(atob(out.image), (c) => c.charCodeAt(0));
-    return new Response(bin, {
-      headers: { "content-type": "image/jpeg", "cache-control": "no-store" },
+    const out = await ai.image({ prompt: p, steps: 6 });
+    return new Response(out.bytes, {
+      headers: { "content-type": out.contentType, "cache-control": "no-store" },
     });
   } catch (e) {
     const msg = e?.message ?? String(e);
@@ -177,7 +182,7 @@ async function handleGenerate(req, env) {
 
 const MAX_BLOB = 8 * 1024 * 1024; // 1ファイル上限 8MB
 
-async function saveWork(req, env, ctx) {
+async function saveWork(req, env, ctx, ai) {
   if (!authed(req, env)) return json({ error: "unauthorized" }, 401);
   if (!(await rateLimit(env, clientIp(req) + "#gallery", 10))) {
     return json({ error: "rate limited" }, 429);
@@ -247,7 +252,7 @@ async function saveWork(req, env, ctx) {
 
   // 埋め込みはレスポンスを待たせずバックグラウンドで計算する
   ctx.waitUntil(
-    computeEmbedding(env, id).catch((e) =>
+    computeEmbedding(env, ai, id).catch((e) =>
       console.error("bg embed failed:", e?.message ?? e)
     )
   );
@@ -430,7 +435,8 @@ async function deleteWork(req, env, id) {
 
 // サムネイルのキャプション生成 → 埋め込みベクトル化 → D1へ保存
 // 検証済みの形状: llava は {description}, bge-m3 は data[0] が1024次元
-async function computeEmbedding(env, id) {
+async function computeEmbedding(env, ai, id) {
+  if (!ai) return { error: "ai disabled", status: 503 };
   const row = await env.DB.prepare(
     "SELECT prompt, caption, embedding FROM works WHERE id = ?"
   ).bind(id).first();
@@ -446,28 +452,27 @@ async function computeEmbedding(env, id) {
     return { error: "quota exceeded", status: 503 };
   }
   const bytes = new Uint8Array(await obj.arrayBuffer());
-  const cap = await env.AI.run("@cf/llava-hf/llava-1.5-7b-hf", {
-    image: Array.from(bytes),
+  const caption = await ai.caption({
+    bytes,
     prompt: "Describe this image in one concise sentence, focusing on subject, colors and mood.",
-    max_tokens: 64,
+    maxTokens: 64,
   });
-  const caption = (cap?.description ?? "").trim();
   const text = row.prompt ? `${caption} / ${row.prompt}` : caption;
-  const emb = await env.AI.run("@cf/baai/bge-m3", { text: [text || "abstract image"] });
-  const vec = (emb?.data?.[0] ?? []).map((v) => Math.round(v * 1e5) / 1e5);
+  const vec = (await ai.embed({ text: text || "abstract image" }))
+    .map((v) => Math.round(v * 1e5) / 1e5);
   if (!vec.length) throw new Error("empty embedding");
   await env.DB.prepare("UPDATE works SET caption = ?, embedding = ? WHERE id = ?")
     .bind(caption, JSON.stringify(vec), id).run();
   return { caption, embedding: vec };
 }
 
-async function embedRoute(req, env, id) {
+async function embedRoute(req, env, ai, id) {
   if (!authed(req, env)) return json({ error: "unauthorized" }, 401);
   if (!(await rateLimit(env, clientIp(req) + "#embed", 20))) {
     return json({ error: "rate limited" }, 429);
   }
   try {
-    const r = await computeEmbedding(env, id);
+    const r = await computeEmbedding(env, ai, id);
     if (r.error) return json({ error: r.error }, r.status);
     return json(r);
   } catch (e) {
@@ -514,7 +519,7 @@ function extractJson(text) {
   return tryFrom("{", "}") ?? tryFrom("[", "]");
 }
 
-async function sceneRoute(req, env) {
+async function sceneRoute(req, env, ai) {
   if (!(await rateLimit(env, clientIp(req) + "#scene", 10))) {
     return json({ error: "rate limited" }, 429);
   }
@@ -531,15 +536,12 @@ async function sceneRoute(req, env) {
   if (!(await spendAiBudget(env, AI_COST.llm70b)).ok) return budgetExceeded();
 
   try {
-    const r = await env.AI.run("@cf/meta/llama-3.3-70b-instruct-fp8-fast", {
-      messages: [
-        { role: "system", content: SCENE_SYSTEM },
-        { role: "user", content: prompt.trim() },
-      ],
-      max_tokens: 700,
+    const raw = await ai.chat({
+      system: SCENE_SYSTEM,
+      user: prompt.trim(),
+      maxTokens: 700,
     });
     // モデル/ランタイムによりresponseが文字列でなくパース済みオブジェクトの場合がある
-    const raw = r?.response;
     const spec =
       raw && typeof raw === "object" ? raw : extractJson(String(raw ?? ""));
     if (!spec || typeof spec !== "object") {
@@ -568,7 +570,7 @@ const SUGGEST_SYSTEM = [
   "Make each suggestion concretely different from the existing works described in the input.",
 ].join("\n");
 
-async function suggestRoute(req, env) {
+async function suggestRoute(req, env, ai) {
   if (!authed(req, env)) return json({ error: "unauthorized" }, 401);
   if (!(await rateLimit(env, clientIp(req) + "#suggest", 10))) {
     return json({ error: "rate limited" }, 429);
@@ -598,14 +600,11 @@ async function suggestRoute(req, env) {
   if (!(await spendAiBudget(env, AI_COST.llm70b)).ok) return budgetExceeded();
 
   try {
-    const r = await env.AI.run("@cf/meta/llama-3.3-70b-instruct-fp8-fast", {
-      messages: [
-        { role: "system", content: SUGGEST_SYSTEM },
-        { role: "user", content: userMsg },
-      ],
-      max_tokens: 700,
+    const raw = await ai.chat({
+      system: SUGGEST_SYSTEM,
+      user: userMsg,
+      maxTokens: 700,
     });
-    const raw = r?.response;
     // モデル/ランタイムによりresponseが文字列でなくパース済みの場合がある
     let parsed = raw && typeof raw === "object" ? raw : extractJson(String(raw ?? ""));
     if (parsed && !Array.isArray(parsed)) {
@@ -630,12 +629,24 @@ export default {
   async fetch(req, env, ctx) {
     const url = new URL(req.url);
     const { pathname } = url;
+    const ai = getAiProvider(env);
+    const gallery = galleryEnabled(env);
+
+    // フロントに構成を伝える。AIやギャラリーが無い構成では該当UIを隠す
+    if (pathname === "/api/config") {
+      return new Response(
+        JSON.stringify({ ai: !!ai, gallery, aiProvider: ai?.name ?? "none" }),
+        { headers: { "content-type": "application/json", "cache-control": "no-store" } }
+      );
+    }
 
     if (pathname === "/api/generate" && req.method === "POST") {
-      return handleGenerate(req, env);
+      if (!ai) return disabled("ai");
+      return handleGenerate(req, env, ai);
     }
     if (pathname === "/api/scene" && req.method === "POST") {
-      return sceneRoute(req, env);
+      if (!ai) return disabled("ai");
+      return sceneRoute(req, env, ai);
     }
 
     // 当日のAI使用量の確認用（消費0で現在値だけ読む）
@@ -645,14 +656,18 @@ export default {
       return json({ used: b.used, cap: b.cap, freeAllocation: 10000 });
     }
 
-    if (pathname === "/api/suggest" && req.method === "POST") return suggestRoute(req, env);
+    if (pathname === "/api/suggest" && req.method === "POST") {
+      if (!ai) return disabled("ai");
+      return suggestRoute(req, env, ai);
+    }
 
-    if (pathname === "/api/works" && req.method === "POST") return saveWork(req, env, ctx);
+    if (pathname.startsWith("/api/works") && !gallery) return disabled("gallery");
+    if (pathname === "/api/works" && req.method === "POST") return saveWork(req, env, ctx, ai);
     if (pathname === "/api/works" && req.method === "GET") return listWorks(req, env);
 
     // 共有ページ（作品ごと・24時間で失効）
     const sm = pathname.match(/^\/w\/([0-9a-f-]{36})$/);
-    if (sm && req.method === "GET") {
+    if (sm && req.method === "GET" && gallery) {
       return sharePage(sm[1], await sharedMeta(env, sm[1]), url.origin);
     }
 
@@ -661,7 +676,10 @@ export default {
       if (req.method === "GET" && (m[2] === "source" || m[2] === "thumb")) {
         return getWorkImage(req, env, url, m[1], m[2]);
       }
-      if (req.method === "POST" && m[2] === "embed") return embedRoute(req, env, m[1]);
+      if (req.method === "POST" && m[2] === "embed") {
+        if (!ai) return disabled("ai");
+        return embedRoute(req, env, ai, m[1]);
+      }
       if (req.method === "POST" && m[2] === "share") return shareWork(req, env, m[1]);
       if (req.method === "GET" && m[2] === "meta") {
         const meta = await sharedMeta(env, m[1]);

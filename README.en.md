@@ -104,6 +104,9 @@ AI_MODEL_EMBED=bge-m3
 | `AI_API_KEY` | none | Key for the `openai` provider (often unnecessary for local models) |
 | `AI_MODEL_CHAT` etc. | provider default | Model names (`_CHAT_SMALL` / `_IMAGE` / `_VISION` / `_EMBED`) |
 | `AI_DAILY_CAP` | `8000` | Daily AI budget. Requests return 503 once exceeded |
+| `WEB_ANALYTICS_TOKEN` | none | Cloudflare Web Analytics token. The beacon loads only when set |
+| `GA_MEASUREMENT_ID` | none | GA4 measurement ID. gtag loads only when set |
+| `PLAUSIBLE_DOMAIN` / `PLAUSIBLE_SRC` | none | Domain registered with Plausible (or a compatible script) and its script URL |
 
 Copy `.dev.vars.example` to `.dev.vars` to get started.
 
@@ -129,6 +132,7 @@ Copy `.dev.vars.example` to `.dev.vars` to get started.
 | Protection | Per-IP rate limiting (Durable Objects) and a daily AI budget guard |
 | i18n | Japanese and English UI. Auto-detected, switchable, and deep-linkable via `/#lang=en` |
 | PWA | Manifest + service worker (network-first) |
+| Usage analytics | Per-feature counters in Analytics Engine. No cookies, no visitor IDs, fully disabled unless configured ([details](#usage-analytics)) |
 
 ## Layout
 
@@ -136,6 +140,7 @@ Copy `.dev.vars.example` to `.dev.vars` to get started.
 public/          Static assets (this alone runs as Tier 1)
   app.js         WebGL2 pipeline, UI, pixel sort, GIF encoder, graph
   i18n.js        Japanese/English strings
+  analytics.js   Usage event sender (a no-op when there is no endpoint)
   about.html     About page (about-en.html for English)
 src/
   worker.js      API routing, gallery, sharing, rate limiting
@@ -147,6 +152,47 @@ wrangler.jsonc   Workers config (change name / database_id / bucket_name when fo
 Rendering is a multi-pass pipeline: source (＋ CPU pixel sort) → separable Gaussian
 blur → luminance extraction + blur (halation) → a final composite shader handling
 glitch, aberration, dithering, grading, CRT, text and grain.
+
+## Usage analytics
+
+Only there to answer "which features do people actually use". All three parts are
+**optional**: with nothing configured, not a single byte of analytics code is served,
+so a fork never reports to the original author.
+
+| What | Where to read it | Enabled by |
+|---|---|---|
+| Page views, referrers, country, Core Web Vitals | Cloudflare Web Analytics | `WEB_ANALYTICS_TOKEN` |
+| Per-feature usage counts | Workers Analytics Engine | `analytics_engine_datasets` in `wrangler.jsonc` |
+| (optional) third-party SaaS | GA4 / Plausible | `GA_MEASUREMENT_ID` / `PLAUSIBLE_DOMAIN` |
+
+The recorded events are below. Client-sent event names are allowlisted in
+`CLIENT_EVENTS` (`src/worker.js`); anything else is dropped.
+
+| Event | Label | Meaning |
+|---|---|---|
+| `app_open` | language | The editor actually started |
+| `effect_on` | effect id | An effect was switched on |
+| `preset` | preset name | A preset was picked (the initial one is not counted) |
+| `random` / `sample` / `open_image` | — | Randomize / sample switch / opened own image |
+| `export` | `png` `mp4` `webm` `gif` | Exported |
+| `share` | `image` `url` | Shared on X (image share link, or recipe URL) |
+| `ai_image` / `ai_scene` / `ai_suggest` | `ok` / HTTP status | AI calls and their outcome |
+| `work_save` / `work_share` | same | Saved to gallery / share link issued |
+| `share_view` | `ok` / `expired` | A share page was opened (cached hits are not counted, so it is a lower bound) |
+
+**Never recorded**: IP, User-Agent, cookies, visitor IDs, images, prompt text, recipe
+contents. Location is rounded to the country code.
+
+Query it through the Analytics Engine SQL API:
+
+```sh
+curl "https://api.cloudflare.com/client/v4/accounts/$ACCOUNT_ID/analytics_engine/sql" \
+  -H "Authorization: Bearer $API_TOKEN" \
+  -d "SELECT blob1 AS event, blob2 AS label, sum(_sample_interval) AS n
+      FROM noiz_lab_events
+      WHERE timestamp > now() - INTERVAL '7' DAY
+      GROUP BY event, label ORDER BY n DESC"
+```
 
 ## Development
 

@@ -34,6 +34,117 @@ const json = (obj, status = 200) =>
 
 const clientIp = (req) => req.headers.get("cf-connecting-ip") || "unknown";
 
+// ---------------------------------------------------------------- 計測（需要の把握）
+// 「どの機能がどれだけ使われているか」だけを知るための仕組み。
+// 個人は追跡しない: IP・User-Agent・プロンプト本文・画像は一切記録せず、
+// 地域は国コードまでに丸める。Analytics Engineのバインディングが無い構成
+// （Tier 1 / 静的ホスティング / ローカル）では丸ごと何もしない。
+function trackEvent(env, req, event, label = "", value = 1) {
+  if (!env.ANALYTICS) return;
+  try {
+    env.ANALYTICS.writeDataPoint({
+      // サンプリングの単位。1データポイントにつき1つだけ指定できる
+      indexes: [event],
+      blobs: [event, String(label ?? "").slice(0, 64), req?.cf?.country ?? "XX"],
+      doubles: [Number(value) || 0],
+    });
+  } catch {
+    // 計測の失敗で本来の処理を止めない
+  }
+}
+
+// ハンドラの結果（成否）まで含めて1件記録する
+async function tracked(env, req, event, promise) {
+  const res = await promise;
+  trackEvent(env, req, event, res.ok ? "ok" : String(res.status));
+  return res;
+}
+
+// クライアントから受け付けるイベント名。許可リストの外は捨てる
+// （任意の文字列をデータセットに書き込ませない）
+const CLIENT_EVENTS = new Set([
+  "app_open",    // エディタが実際に起動した
+  "effect_on",   // エフェクトをONにした（label = エフェクトID）
+  "preset",      // プリセットを選んだ（label = プリセット名）
+  "random",      // おまかせ
+  "sample",      // サンプル画像の切り替え
+  "open_image",  // 自分の画像を開いた
+  "export",      // 書き出し（label = png / mp4 / webm / gif）
+  "share",       // 共有ボタン（label = image / url）
+]);
+
+const MAX_EVENT_BODY = 4096;
+const MAX_EVENTS_PER_REQ = 20;
+
+async function handleEvent(req, env) {
+  // 計測先が無い構成では受け取らない（クライアントも/api/configを見て送信しない）
+  if (!env.ANALYTICS) return new Response(null, { status: 204 });
+  if (Number(req.headers.get("content-length")) > MAX_EVENT_BODY) {
+    return new Response(null, { status: 204 });
+  }
+  if (!(await rateLimit(env, clientIp(req) + "#ev", 60))) {
+    return new Response(null, { status: 204 });
+  }
+  let body;
+  try {
+    body = await req.json();
+  } catch {
+    return new Response(null, { status: 204 });
+  }
+  const list = Array.isArray(body?.events) ? body.events.slice(0, MAX_EVENTS_PER_REQ) : [];
+  for (const it of list) {
+    if (!CLIENT_EVENTS.has(it?.e)) continue;
+    trackEvent(env, req, it.e, typeof it.l === "string" ? it.l : "", Number(it.v) || 1);
+  }
+  // 計測は本流ではないので、失敗も成功も同じ204で返す
+  return new Response(null, { status: 204 });
+}
+
+// ---------------------------------------------------------------- 外部の計測タグ
+// 環境変数が設定されているときだけ<head>に足す。未設定なら1バイトも入らないので、
+// forkした人の計測先が作者になることはない。値は形式を検証し、外れたものは無視する。
+const TAG_PATTERNS = {
+  WEB_ANALYTICS_TOKEN: /^[0-9a-f]{32}$/i,        // Cloudflare Web Analyticsのトークン
+  GA_MEASUREMENT_ID: /^G-[A-Z0-9]{4,20}$/i,      // GA4の測定ID
+  PLAUSIBLE_DOMAIN: /^[a-z0-9.-]{3,120}$/i,      // Plausible等に登録したドメイン
+};
+
+function tagValue(env, name) {
+  const v = env[name];
+  if (!v) return null;
+  if (TAG_PATTERNS[name].test(v)) return v;
+  console.warn(`analytics: ${name} の形式が不正なため無視しました`);
+  return null;
+}
+
+function analyticsTags(env) {
+  const out = [];
+  const cf = tagValue(env, "WEB_ANALYTICS_TOKEN");
+  if (cf) {
+    out.push(
+      `<script defer src="https://static.cloudflareinsights.com/beacon.min.js" ` +
+      `data-cf-beacon='{"token":"${cf}"}'></script>`
+    );
+  }
+  const plausible = tagValue(env, "PLAUSIBLE_DOMAIN");
+  if (plausible) {
+    // セルフホスト版を使う場合は PLAUSIBLE_SRC でスクリプトの場所を差し替える
+    const src = env.PLAUSIBLE_SRC || "https://plausible.io/js/script.js";
+    if (/^https:\/\/[a-z0-9.\-\/]+\.js$/i.test(src)) {
+      out.push(`<script defer data-domain="${plausible}" src="${src}"></script>`);
+    }
+  }
+  const ga = tagValue(env, "GA_MEASUREMENT_ID");
+  if (ga) {
+    out.push(
+      `<script async src="https://www.googletagmanager.com/gtag/js?id=${ga}"></script>` +
+      `<script>window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments)}` +
+      `gtag('js',new Date());gtag('config','${ga}');</script>`
+    );
+  }
+  return out.join("");
+}
+
 async function rateLimit(env, key, limit) {
   // Durable Objectsを繋いでいない構成でも動くようにする
   if (!env.LIMITER) return true;
@@ -680,9 +791,11 @@ async function suggestRoute(req, env, ai) {
   }
 }
 
-// 静的HTMLのog:url/og:imageを、実際に配信しているoriginの絶対URLに書き換える。
-// これによりfork先でも設定なしで正しいOGPになる。
-function rewriteOgp(res, origin) {
+// 配信時にHTMLへ手を入れる。
+//  - og:url/og:image を実際に配信しているoriginの絶対URLに書き換える
+//    （これによりfork先でも設定なしで正しいOGPになる）
+//  - 計測タグが設定されていれば<head>の末尾に足す
+function decorateHtml(res, origin, env) {
   if (!(res.headers.get("content-type") || "").includes("text/html")) return res;
   // HTMLRewriterはセレクタリスト(カンマ区切り)に対応しないため個別に登録する
   const absolutize = {
@@ -691,11 +804,15 @@ function rewriteOgp(res, origin) {
       if (c && c.startsWith("/")) el.setAttribute("content", origin + c);
     },
   };
-  return new HTMLRewriter()
+  let rw = new HTMLRewriter()
     .on('meta[property="og:url"]', absolutize)
     .on('meta[property="og:image"]', absolutize)
-    .on('meta[name="twitter:image"]', absolutize)
-    .transform(res);
+    .on('meta[name="twitter:image"]', absolutize);
+  const tags = analyticsTags(env);
+  if (tags) {
+    rw = rw.on("head", { element: (el) => el.append(tags, { html: true }) });
+  }
+  return rw.transform(res);
 }
 
 export default {
@@ -708,18 +825,29 @@ export default {
     // フロントに構成を伝える。AIやギャラリーが無い構成では該当UIを隠す
     if (pathname === "/api/config") {
       return new Response(
-        JSON.stringify({ ai: !!ai, gallery, aiProvider: ai?.name ?? "none" }),
+        JSON.stringify({
+          ai: !!ai,
+          gallery,
+          aiProvider: ai?.name ?? "none",
+          // 計測先が無い構成では、クライアントはイベントを一切送らない
+          analytics: !!env.ANALYTICS,
+        }),
         { headers: { "content-type": "application/json", "cache-control": "no-store" } }
       );
     }
 
+    // クライアントからの利用イベント（許可リストのイベント名のみ受け付ける）
+    if (pathname === "/api/event" && req.method === "POST") {
+      return handleEvent(req, env);
+    }
+
     if (pathname === "/api/generate" && req.method === "POST") {
       if (!ai) return disabled("ai");
-      return handleGenerate(req, env, ai);
+      return tracked(env, req, "ai_image", handleGenerate(req, env, ai));
     }
     if (pathname === "/api/scene" && req.method === "POST") {
       if (!ai) return disabled("ai");
-      return sceneRoute(req, env, ai);
+      return tracked(env, req, "ai_scene", sceneRoute(req, env, ai));
     }
 
     // 当日のAI使用量の確認用（消費0で現在値だけ読む）
@@ -731,17 +859,23 @@ export default {
 
     if (pathname === "/api/suggest" && req.method === "POST") {
       if (!ai) return disabled("ai");
-      return suggestRoute(req, env, ai);
+      return tracked(env, req, "ai_suggest", suggestRoute(req, env, ai));
     }
 
     if (pathname.startsWith("/api/works") && !gallery) return disabled("gallery");
-    if (pathname === "/api/works" && req.method === "POST") return saveWork(req, env, ctx, ai);
+    if (pathname === "/api/works" && req.method === "POST") {
+      return tracked(env, req, "work_save", saveWork(req, env, ctx, ai));
+    }
     if (pathname === "/api/works" && req.method === "GET") return listWorks(req, env);
 
     // 共有ページ（作品ごと・24時間で失効）
     const sm = pathname.match(/^\/w\/([0-9a-f-]{36})$/);
     if (sm && req.method === "GET" && gallery) {
-      return sharePage(sm[1], await sharedMeta(env, sm[1]), url.origin, env);
+      const meta = await sharedMeta(env, sm[1]);
+      // 共有リンクが実際に開かれた回数。期限切れかどうかも分けて数える
+      // （キャッシュに載る分は数えられないので、下限値として見る）
+      trackEvent(env, req, "share_view", meta ? "ok" : "expired");
+      return decorateHtml(await sharePage(sm[1], meta, url.origin, env), url.origin, env);
     }
 
     const m = pathname.match(/^\/api\/works\/([0-9a-f-]{36})(?:\/(source|thumb|og|embed|share|meta))?$/);
@@ -753,7 +887,9 @@ export default {
         if (!ai) return disabled("ai");
         return embedRoute(req, env, ai, m[1]);
       }
-      if (req.method === "POST" && m[2] === "share") return shareWork(req, env, m[1]);
+      if (req.method === "POST" && m[2] === "share") {
+        return tracked(env, req, "work_share", shareWork(req, env, m[1]));
+      }
       if (req.method === "GET" && m[2] === "meta") {
         const meta = await sharedMeta(env, m[1]);
         return meta ? json(meta) : json({ error: "not shared" }, 404);
@@ -762,6 +898,6 @@ export default {
     }
 
     // OGPの絶対URLはデプロイ先で変わるため、配信時にoriginを埋める
-    return rewriteOgp(await env.ASSETS.fetch(req), url.origin);
+    return decorateHtml(await env.ASSETS.fetch(req), url.origin, env);
   },
 };

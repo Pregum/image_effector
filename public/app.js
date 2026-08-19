@@ -1,4 +1,5 @@
 import { t, LANG, setLang, localizeDom } from "./i18n.js";
+import { track, setAnalyticsEnabled } from "./analytics.js";
 
 /* NOIZ LAB — 画像エフェクト実験室
  * すべての画像処理はブラウザ内 WebGL2 + Canvas で完結する。
@@ -494,6 +495,7 @@ for (const mod of MODULES) {
   head.addEventListener("click", () => {
     enabled[mod.id] = !enabled[mod.id];
     el.classList.toggle("on", enabled[mod.id]);
+    if (enabled[mod.id]) track("effect_on", mod.id);
     if (mod.id === "sort") scheduleSort();
     markDirty();
   });
@@ -579,7 +581,10 @@ for (const pr of PRESETS) {
   const b = document.createElement("button");
   b.className = "preset-chip";
   b.textContent = pr.name;
-  b.addEventListener("click", () => applyPreset(pr));
+  b.addEventListener("click", () => {
+    track("preset", pr.name);
+    applyPreset(pr);
+  });
   presetRow.appendChild(b);
 }
 
@@ -593,6 +598,7 @@ function applyPreset(pr) {
 }
 
 document.getElementById("btn-random").addEventListener("click", () => {
+  track("random");
   const pool = ["blur", "glitch", "rgb", "halation", "grade", "leak", "pixel", "dither", "crt", "grain", "sort"];
   Object.assign(state, DEFAULTS);
   for (const k of Object.keys(enabled)) enabled[k] = false;
@@ -827,7 +833,10 @@ async function loadBlob(blob) {
 const fileInput = document.getElementById("file-input");
 document.getElementById("btn-open").addEventListener("click", () => fileInput.click());
 fileInput.addEventListener("change", () => {
-  if (fileInput.files[0]) loadBlob(fileInput.files[0]);
+  if (fileInput.files[0]) {
+    track("open_image");
+    loadBlob(fileInput.files[0]);
+  }
   fileInput.value = "";
 });
 
@@ -1063,6 +1072,7 @@ document.getElementById("btn-save").addEventListener("click", () => {
   out.getContext("2d").drawImage(canvas, sx, sy, sw, sh, 0, 0, sw, sh);
   out.toBlob((blob) => {
     if (!blob) return;
+    track("export", "png");
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
     a.download = `noizlab_${Date.now()}.png`;
@@ -1474,6 +1484,7 @@ async function exportSequence() {
       return;
     }
     const isMp4 = (rec.mimeType || mime).includes("mp4");
+    track("export", isMp4 ? "mp4" : "webm");
     const blob = new Blob(chunks, { type: mime.split(";")[0] });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
@@ -1697,6 +1708,7 @@ async function exportGif() {
     await new Promise((r) => setTimeout(r));
     const gif = encodeGif(frames, ow, oh, Math.round(100 / fps));
 
+    track("export", "gif");
     const blob = new Blob([gif], { type: "image/gif" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
@@ -1806,6 +1818,7 @@ shareBtn.addEventListener("click", async () => {
       setTimeout(() => { shareBtn.textContent = t("𝕏 シェア"); }, 1800);
     }
   }
+  track("share", withImage ? "image" : "url");
   const intent =
     `https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}` +
     `&url=${encodeURIComponent(url)}&hashtags=NOIZLAB`;
@@ -3636,7 +3649,10 @@ function makeSample(i = 0) {
   setSourceImage(c, w, h);
   document.getElementById("drop-hint").style.display = "";
 }
-document.getElementById("btn-sample").addEventListener("click", () => makeSample(sampleIndex + 1));
+document.getElementById("btn-sample").addEventListener("click", () => {
+  track("sample");
+  makeSample(sampleIndex + 1);
+});
 
 // URLハッシュで初期状態を指定可（例: /#preset=CINEMA&sample=2）。指定なしはY2Kでデモ
 const sampleMatch = location.hash.match(/sample=(\d+)/);
@@ -3692,7 +3708,7 @@ if (sharedHashMatch) {
 // ---------------------------------------------------------------- 構成に応じたUIの出し分け
 // バックエンドが無い構成（静的ホスティングのみ）でも壊れないように、
 // 使えない機能のUIは隠す。取得できなければ「どちらも無し」とみなす。
-const FEATURES_OFF = { ai: false, gallery: false };
+const FEATURES_OFF = { ai: false, gallery: false, analytics: false };
 let FEATURES = FEATURES_OFF;
 
 async function loadFeatures() {
@@ -3703,7 +3719,7 @@ async function loadFeatures() {
       return FEATURES_OFF; // 静的ホスティングのHTML 404が返るケース
     }
     const c = await res.json();
-    return { ai: !!c.ai, gallery: !!c.gallery };
+    return { ai: !!c.ai, gallery: !!c.gallery, analytics: !!c.analytics };
   } catch {
     return FEATURES_OFF;
   }
@@ -3711,6 +3727,9 @@ async function loadFeatures() {
 
 loadFeatures().then((f) => {
   FEATURES = f;
+  // 送信先が無い構成では、ここまでに溜まったイベントごと破棄される
+  setAnalyticsEnabled(!!f.analytics);
+  track("app_open", LANG);
   if (!f.ai) {
     document.querySelector(".ai-box")?.setAttribute("hidden", "");
   }

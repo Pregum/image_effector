@@ -100,6 +100,9 @@ AI_MODEL_EMBED=bge-m3
 | `AI_API_KEY` | なし | `openai` 時のキー（ローカルAIなら不要な場合が多い） |
 | `AI_MODEL_CHAT` ほか | プロバイダ既定 | 使用モデル名（`_CHAT_SMALL` / `_IMAGE` / `_VISION` / `_EMBED`） |
 | `AI_DAILY_CAP` | `8000` | 1日あたりのAI予算。超えると503を返して止まる |
+| `WEB_ANALYTICS_TOKEN` | なし | Cloudflare Web Analyticsのトークン。設定時だけビーコンを読み込む |
+| `GA_MEASUREMENT_ID` | なし | GA4の測定ID。設定時だけgtagを読み込む |
+| `PLAUSIBLE_DOMAIN` / `PLAUSIBLE_SRC` | なし | Plausible等に登録したドメインとスクリプトURL |
 
 `.dev.vars.example` をコピーして `.dev.vars` を作ってください。
 
@@ -124,6 +127,7 @@ AI_MODEL_EMBED=bge-m3
 | 次の一手 | グラフの構造的な穴を検出し、それを埋める作品をLLMが提案。その場で生成できる |
 | 保護 | IPごとのレート制限 (Durable Objects) と日次AI予算ガード |
 | 多言語 | 日本語・英語のUI。自動判定＋切替ボタン。`/#lang=en` で直リンク可 |
+| 利用状況の計測 | 機能ごとの利用回数をAnalytics Engineへ。Cookie・訪問者IDなし。未設定なら完全に無効（[詳細](#利用状況の計測)） |
 | PWA | manifest + Service Worker（ネットワーク優先） |
 
 ## 構成
@@ -132,6 +136,7 @@ AI_MODEL_EMBED=bge-m3
 public/          静的アセット（これだけでTier 1として動く）
   app.js         WebGL2パイプライン・UI・ピクセルソート・GIFエンコーダ・グラフ
   i18n.js        日本語・英語の文言
+  analytics.js   利用イベントの送信（送信先が無ければ何もしない）
   about.html     サイトの説明ページ（英語版は about-en.html）
 src/
   worker.js      APIルーティング・ギャラリー・共有・レート制限
@@ -145,6 +150,47 @@ wrangler.jsonc   Workers設定（fork時は name / database_id / bucket_name を
 
 **外部ライブラリを使っていません。** フォースグラフの力学シミュレーション、GIFのLZW圧縮と減色、
 ピクセルソート、全エフェクトのシェーダーはすべて自前実装です（`package.json` もありません）。
+
+## 利用状況の計測
+
+「どの機能に需要があるか」を知るためだけの仕組みです。3つとも**任意**で、
+何も設定しなければ計測用のコードは1バイトも配信されません（forkした人の計測先が
+作者になることはありません）。
+
+| 何を | どこで見る | 有効化 |
+|---|---|---|
+| ページビュー・リファラ・国・Core Web Vitals | Cloudflare Web Analytics | `WEB_ANALYTICS_TOKEN` |
+| 機能ごとの利用回数 | Workers Analytics Engine | `wrangler.jsonc` の `analytics_engine_datasets` |
+| （任意）外部SaaS | GA4 / Plausible | `GA_MEASUREMENT_ID` / `PLAUSIBLE_DOMAIN` |
+
+記録するイベントは次のとおりです。クライアント発のイベント名は
+`src/worker.js` の `CLIENT_EVENTS` で許可リスト化されており、それ以外は捨てられます。
+
+| イベント | ラベル | 意味 |
+|---|---|---|
+| `app_open` | 言語 | エディタが実際に起動した |
+| `effect_on` | エフェクトID | エフェクトをONにした |
+| `preset` | プリセット名 | プリセットを選んだ（初期表示は数えない） |
+| `random` / `sample` / `open_image` | — | おまかせ / サンプル切替 / 自分の画像を開いた |
+| `export` | `png` `mp4` `webm` `gif` | 書き出した |
+| `share` | `image` `url` | Xでシェアした（画像つき共有リンクか、レシピURLか） |
+| `ai_image` / `ai_scene` / `ai_suggest` | `ok` / HTTPステータス | AI機能の呼び出しと成否 |
+| `work_save` / `work_share` | 同上 | ギャラリー保存 / 共有リンク発行 |
+| `share_view` | `ok` / `expired` | 共有ページが開かれた（キャッシュ分は数えないので下限値） |
+
+**記録しないもの**: IP・User-Agent・Cookie・訪問者ID・画像・プロンプト本文・レシピの中身。
+地域は国コードまでに丸めています。
+
+集計はAnalytics EngineのSQL APIで行えます。
+
+```sh
+curl "https://api.cloudflare.com/client/v4/accounts/$ACCOUNT_ID/analytics_engine/sql" \
+  -H "Authorization: Bearer $API_TOKEN" \
+  -d "SELECT blob1 AS event, blob2 AS label, sum(_sample_interval) AS n
+      FROM noiz_lab_events
+      WHERE timestamp > now() - INTERVAL '7' DAY
+      GROUP BY event, label ORDER BY n DESC"
+```
 
 ## 開発
 

@@ -23,3 +23,19 @@ GALLERY_KEY=change-me-to-a-long-random-string
 
 # 1日あたりのAI予算（Workers AIの無料枠10,000ニューロンの手前で止める）
 # AI_DAILY_CAP=8000
+
+# --- 計測（すべて任意。未設定なら計測は行われない） ---
+# Cloudflare Web Analytics のトークン（ダッシュボードで発行される32桁の16進文字列）。
+# 設定するとページビュー・リファラ・国・Core Web VitalsがCloudflare側で見られる。
+# WEB_ANALYTICS_TOKEN=0123456789abcdef0123456789abcdef
+
+# Google Analytics 4 の測定ID。設定したときだけgtagが読み込まれる。
+# GA_MEASUREMENT_ID=G-XXXXXXXXXX
+
+# Plausible（またはUmami等の互換スクリプト）に登録したドメイン。
+# PLAUSIBLE_DOMAIN=example.com
+# セルフホスト版を使う場合のスクリプトURL（https:// で終端が .js のみ許可）
+# PLAUSIBLE_SRC=https://analytics.example.com/js/script.js
+
+# 機能ごとの利用回数は wrangler.jsonc の analytics_engine_datasets に書き出される。
+# バインディングを外せば、その計測も丸ごと無効になる。

@@ -24,6 +24,13 @@
       "bucket_name": "noiz-lab-works"
     }
   ],
+  // 需要の把握用。未設定でも動く（バインディングが無ければ計測は自動的に無効）
+  "analytics_engine_datasets": [
+    {
+      "binding": "ANALYTICS",
+      "dataset": "noiz_lab_events"
+    }
+  ],
   "durable_objects": {
     "bindings": [
       { "name": "LIMITER", "class_name": "RateLimiter" }

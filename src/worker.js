@@ -12,6 +12,17 @@ export class RateLimiter extends DurableObject {
     await this.ctx.storage.put("w", w);
     return w.count <= limit;
   }
+
+  // 日次のAI予算を消費する（UTC日で自動リセット。Cloudflareの無料枠リセットと同じ区切り）
+  async spendDaily(cost, cap) {
+    const day = Math.floor(Date.now() / 86_400_000);
+    let b = (await this.ctx.storage.get("b")) ?? null;
+    if (!b || b.day !== day) b = { day, used: 0 };
+    if (b.used + cost > cap) return { ok: false, used: b.used, cap };
+    b.used += cost;
+    await this.ctx.storage.put("b", b);
+    return { ok: true, used: b.used, cap };
+  }
 }
 
 const json = (obj, status = 200) =>
@@ -30,6 +41,32 @@ function authed(req, env) {
   if (!env.GALLERY_KEY) return false;
   return req.headers.get("x-gallery-key") === env.GALLERY_KEY;
 }
+
+// --- AI予算ガード ---
+// Workers AIの無料枠は10,000ニューロン/日。その手前(80%)で自分から止めることで、
+// 万一アカウントが有料プランだったとしても従量課金の領域に入らない。
+const AI_DAILY_CAP = 8000;
+// 1呼び出しあたりのニューロン概算（公式の単価表からの見積り。安全側に多め)
+const AI_COST = {
+  image: 120,   // flux-1-schnell 1024x1024 / 6ステップ
+  caption: 80,  // llava-1.5-7b
+  embed: 10,    // bge-m3
+  llm70b: 200,  // llama-3.3-70b
+  llm8b: 30,    // llama-3.1-8b
+};
+
+async function spendAiBudget(env, cost) {
+  try {
+    const stub = env.LIMITER.get(env.LIMITER.idFromName("ai-budget-global"));
+    return await stub.spendDaily(cost, AI_DAILY_CAP);
+  } catch {
+    // 予算カウンタ自体が落ちている場合は通す（機能停止より継続を優先）
+    return { ok: true, used: 0, cap: AI_DAILY_CAP };
+  }
+}
+
+const budgetExceeded = () =>
+  json({ error: "quota exceeded", reason: "daily-ai-budget" }, 503);
 
 // 日本語などの非ASCIIプロンプトを画像モデル向けに英訳する（失敗時は原文のまま）
 async function translatePrompt(env, p) {
@@ -73,6 +110,8 @@ async function handleGenerate(req, env) {
   if (typeof prompt !== "string" || !prompt.trim() || prompt.length > 500) {
     return json({ error: "invalid prompt" }, 400);
   }
+
+  if (!(await spendAiBudget(env, AI_COST.image + AI_COST.llm8b)).ok) return budgetExceeded();
 
   const p = await translatePrompt(env, prompt.trim());
 
@@ -236,6 +275,9 @@ async function computeEmbedding(env, id) {
   }
   const obj = await env.IMAGES.get(`works/${id}/thumb`);
   if (!obj) return { error: "no thumb", status: 404 };
+  if (!(await spendAiBudget(env, AI_COST.caption + AI_COST.embed)).ok) {
+    return { error: "quota exceeded", status: 503 };
+  }
   const bytes = new Uint8Array(await obj.arrayBuffer());
   const cap = await env.AI.run("@cf/llava-hf/llava-1.5-7b-hf", {
     image: Array.from(bytes),
@@ -319,6 +361,8 @@ async function sceneRoute(req, env) {
   if (typeof prompt !== "string" || !prompt.trim() || prompt.length > 300) {
     return json({ error: "invalid prompt" }, 400);
   }
+  if (!(await spendAiBudget(env, AI_COST.llm70b)).ok) return budgetExceeded();
+
   try {
     const r = await env.AI.run("@cf/meta/llama-3.3-70b-instruct-fp8-fast", {
       messages: [
@@ -384,6 +428,8 @@ async function suggestRoute(req, env) {
     ...gaps.map((g, i) => `${i + 1}. [${String(g?.kind ?? "gap").slice(0, 24)}] ${String(g?.desc ?? "").slice(0, 200)}`),
   ].join("\n");
 
+  if (!(await spendAiBudget(env, AI_COST.llm70b)).ok) return budgetExceeded();
+
   try {
     const r = await env.AI.run("@cf/meta/llama-3.3-70b-instruct-fp8-fast", {
       messages: [
@@ -423,6 +469,13 @@ export default {
     }
     if (pathname === "/api/scene" && req.method === "POST") {
       return sceneRoute(req, env);
+    }
+
+    // 当日のAI使用量の確認用（消費0で現在値だけ読む）
+    if (pathname === "/api/budget" && req.method === "GET") {
+      if (!authed(req, env)) return json({ error: "unauthorized" }, 401);
+      const b = await spendAiBudget(env, 0);
+      return json({ used: b.used, cap: b.cap, freeAllocation: 10000 });
     }
 
     if (pathname === "/api/suggest" && req.method === "POST") return suggestRoute(req, env);

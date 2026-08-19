@@ -121,7 +121,8 @@ Copy `.dev.vars.example` to `.dev.vars` to get started.
 | Music & BPM | Audio is muxed in as an AAC track. BPM is auto-detected and cuts land on the beat |
 | GIF export | Hand-written GIF89a encoder (median cut + dithering + LZW) |
 | Gallery | Saves the source image and its recipe to R2 + D1. **Images are private by default** and readable only through expiring signed URLs |
-| Share links | Per-work `/w/<id>` pages with OGP that **expire after about a day** |
+| Share links | Per-work `/w/<id>` pages whose OGP card shows **the edited image itself** (1200px long-edge JPEG). **Expire after about a day** |
+| Share on X | With a gallery backend, creates a share link first so the card shows the image. Without one, posts the recipe URL |
 | Knowledge graph | A 2D/3D force-directed graph of saved works, linked by semantic similarity (caption + embedding) and recipe similarity |
 | Crossbreeding | Blend two works' recipes into a child work, visualised with lineage edges |
 | What's next | Detects structural gaps in the graph and has an LLM suggest works that would fill them, creatable in one click |

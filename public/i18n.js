@@ -30,6 +30,11 @@ const EN = {
   "🔗 レシピURL": "🔗 Recipe URL",
   "𝕏 シェア": "𝕏 Share",
   "Xでシェア": "Share on X",
+  "Xでシェア（ギャラリーがある構成では、加工後の画像がカードに出る共有リンクで投稿します）":
+    "Share on X (with a gallery backend, posts a share link whose card shows the edited image)",
+  "共有リンク作成中…": "Creating share link…",
+  "共有リンク失敗": "Share link failed",
+  "NOIZ LAB で画像にエフェクトをかけた🎛️": "Made this with NOIZ LAB 🎛️",
   "コピーしました ✓": "Copied ✓",
   "コピー失敗": "Copy failed",
 

@@ -216,7 +216,6 @@ const EN = {
   "加工はすべてブラウザ内 (WebGL2) で完結し、画像は「ギャラリーへ保存」した時以外サーバーに送信されません。":
     "All editing happens in your browser (WebGL2). Images are never sent to a server unless you press “Save to gallery”.",
   "このサイトについて →": "About this site →",
-  "/about": "/about-en",
   "この構成ではAI生成とギャラリーは無効です。エフェクト・動画・GIFはそのまま使えます。":
     "AI generation and the gallery are disabled in this deployment. Effects, video and GIF still work.",
 };

@@ -210,6 +210,10 @@ guard that halts at 80% of the Workers AI daily free allowance (10,000 neurons).
 That applies to **the Workers Free plan**. A paid plan, or pointing `AI_PROVIDER=openai`
 at a commercial API, will bill you according to that provider's pricing.
 
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md).
+
 ## License and rights
 
 MIT License ([LICENSE](LICENSE)).

@@ -605,3 +605,33 @@ body.embed .layout { grid-template-columns: 1fr; min-height: 100vh; }
 body.embed .stage { padding: 0; background-image: none; }
 body.embed .stage-inner { min-height: 100vh; }
 body.embed #view { max-height: 100vh; border: none; box-shadow: none; }
+
+/* ---- topbar links (About / GitHub) ---- */
+.topbar-links { display: flex; gap: 12px; align-items: baseline; }
+.topbar-links a {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--ink-dim);
+  text-decoration: none;
+  border-bottom: 1px solid transparent;
+  white-space: nowrap;
+}
+.topbar-links a:hover { color: var(--acid); border-bottom-color: var(--acid); }
+
+/* ---- collapsible panel sections ---- */
+.panel-section.collapsible > .section-title {
+  cursor: pointer;
+  user-select: none;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+.panel-section.collapsible > .section-title::before {
+  content: "▾";
+  font-size: 10px;
+  color: var(--ink-dim);
+  transition: transform 0.15s;
+}
+.panel-section.collapsed > .section-title::before { transform: rotate(-90deg); }
+.panel-section.collapsed > .section-title { margin-bottom: 0; }
+.panel-section.collapsed > *:not(.section-title) { display: none; }

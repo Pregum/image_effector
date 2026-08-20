@@ -26,6 +26,10 @@
 <header class="topbar">
   <h1 class="logo" data-text="NOIZ LAB">NOIZ LAB</h1>
   <span class="logo-sub">画像エフェクト実験室</span>
+  <nav class="topbar-links">
+    <a id="nav-about" href="/about">About</a>
+    <a href="https://github.com/Pregum/image_effector" target="_blank" rel="noopener">GitHub</a>
+  </nav>
   <div class="topbar-actions">
     <button id="btn-sample" class="btn" title="サンプル画像を切り替える">◧ サンプル</button>
     <button id="btn-open" class="btn">画像を開く</button>
@@ -87,7 +91,7 @@
   </section>
 
   <aside class="panel">
-    <div class="panel-section ai-box">
+    <div class="panel-section ai-box collapsible" data-sec="ai">
       <h2 class="section-title">AI SOURCE <span class="jp">／ AIで元画像を生成</span></h2>
       <div class="ai-row">
         <input id="ai-prompt" type="text" maxlength="500" placeholder="例: 夕暮れの高速道路を走る古い車" />
@@ -97,12 +101,12 @@
       <p class="ai-note" id="ai-note">「写真」はFLUX.1で画像生成、「シーン」はベクター風イラストを描画。日本語OK。</p>
     </div>
 
-    <div class="panel-section">
+    <div class="panel-section collapsible" data-sec="presets">
       <h2 class="section-title">PRESETS <span class="jp">／ プリセット</span></h2>
       <div class="preset-row" id="presets"></div>
     </div>
 
-    <div class="panel-section">
+    <div class="panel-section collapsible" data-sec="text">
       <h2 class="section-title">TEXT <span class="jp">／ サムネ文字入れ</span></h2>
       <input id="text-input" type="text" maxlength="60" placeholder="タイトル文字（| で改行、空で非表示）" />
       <div class="ctl">
@@ -126,7 +130,7 @@
       <p class="text-hint">プレビュー上をドラッグしても文字を動かせます</p>
     </div>
 
-    <div class="panel-section">
+    <div class="panel-section collapsible collapsed" data-sec="overlay">
       <h2 class="section-title">OVERLAY <span class="jp">／ 重ね画像</span></h2>
       <div class="ai-row">
         <button id="overlay-open" class="btn">画像を選ぶ</button>
@@ -146,7 +150,7 @@
       <p class="text-hint">ドラッグで移動。合成した上からエフェクトが全体にかかります。</p>
     </div>
 
-    <div class="panel-section">
+    <div class="panel-section collapsible collapsed" data-sec="video">
       <h2 class="section-title">VIDEO <span class="jp">／ ショート動画</span></h2>
       <div class="slide-strip" id="slide-strip"></div>
       <div class="ai-row">
@@ -183,14 +187,13 @@
       <p class="text-hint" id="trans-note">「＋ 今の画像」でカットを並べ、下の書き出し比率（9:16など）を選んで書き出し。エフェクトと文字は動画全体にかかります。</p>
     </div>
 
-    <div class="panel-section">
+    <div class="panel-section collapsible" data-sec="rack">
       <h2 class="section-title">EFFECT RACK <span class="jp">／ エフェクトラック</span></h2>
       <div id="rack"></div>
     </div>
 
     <footer class="panel-footer">
       加工はすべてブラウザ内 (WebGL2) で完結し、画像は「ギャラリーへ保存」した時以外サーバーに送信されません。
-      <a href="/about" class="about-link">このサイトについて →</a>
     </footer>
   </aside>
 </main>

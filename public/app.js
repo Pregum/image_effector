@@ -3705,6 +3705,24 @@ if (sharedHashMatch) {
   })();
 }
 
+// ---------------------------------------------------------------- パネルの折りたたみ
+// 右パネルが長くなりすぎたので、セクション単位で畳めるようにする
+for (const sec of document.querySelectorAll(".panel-section.collapsible")) {
+  const key = "nl_sec_" + sec.dataset.sec;
+  const saved = (() => { try { return localStorage.getItem(key); } catch { return null; } })();
+  if (saved === "open") sec.classList.remove("collapsed");
+  if (saved === "closed") sec.classList.add("collapsed");
+  sec.querySelector(".section-title")?.addEventListener("click", () => {
+    const closed = sec.classList.toggle("collapsed");
+    try { localStorage.setItem(key, closed ? "closed" : "open"); } catch {}
+  });
+}
+
+// 英語表示のときはAboutリンクを英語版へ向ける
+if (LANG !== "ja") {
+  document.getElementById("nav-about")?.setAttribute("href", "/about-en");
+}
+
 // ---------------------------------------------------------------- 構成に応じたUIの出し分け
 // バックエンドが無い構成（静的ホスティングのみ）でも壊れないように、
 // 使えない機能のUIは隠す。取得できなければ「どちらも無し」とみなす。
@@ -3739,8 +3757,6 @@ loadFeatures().then((f) => {
     }
     galleryOverlay.hidden = true;
   }
-  const aboutLink = document.querySelector(".about-link");
-  if (aboutLink && LANG !== "ja") aboutLink.setAttribute("href", "/about-en");
   if (!f.ai && !f.gallery) {
     const note = document.querySelector(".panel-footer");
     if (note) {

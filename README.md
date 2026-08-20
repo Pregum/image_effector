@@ -216,6 +216,10 @@ MIT License（[LICENSE](LICENSE)）。
 - フォントはGoogle Fonts (SIL Open Font License) をCDNから読み込んでいます
 - 利用するAIモデルのライセンスは、選んだプロバイダのものに従います
 
+## 変更履歴
+
+[CHANGELOG.md](CHANGELOG.md) を参照してください。
+
 ## ロードマップ
 
 - [x] エフェクト・プリセット・サンプル画像

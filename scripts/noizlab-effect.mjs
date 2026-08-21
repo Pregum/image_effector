@@ -13,35 +13,48 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const PUBLIC = join(ROOT, "public");
 const PRESETS = ["RESET", "Y2K", "VHS", "DREAM", "PRINT", "PIXEL", "SORTED", "CINEMA", "FILM", "NEON"];
 const RATIOS = { original: "0", "16:9": "1.77778", square: "1", "1:1": "1", "9:16": "0.5625" };
+const TRANSITIONS = ["fade", "wipe", "dissolve", "glitch", "punch", "flash", "push", "film-burn"];
 
 function usage(code = 0) {
   console.log(`Usage:
   node scripts/noizlab-effect.mjs <input> <output.png> [options]
+  node scripts/noizlab-effect.mjs --video <input...> <output.mp4> [options]
 
 Options:
   --preset <name>    ${PRESETS.join(" | ")} (default: CINEMA)
   --ratio <ratio>    original | 16:9 | square | 1:1 | 9:16 (default: original)
   --text <text>      Add title text. Use | for a line break.
+  --video            Build a transition video from 2-8 input images
+  --transition <t>   ${TRANSITIONS.join(" | ")} (default: glitch)
+  --hold <seconds>   Time each image stays visible, 0.3-3 (default: 1.4)
+  --duration <sec>   Transition duration, 0.2-2 (default: 0.8)
+  --no-zoom          Disable the alternating Ken Burns zoom
   --chrome <path>    Chrome/Chromium executable path
   --list-presets     Print available presets
   -h, --help         Show this help
 
 Example:
-  node scripts/noizlab-effect.mjs photo.jpg out.png --preset FILM --text "夏の終わり|1999"`);
+  node scripts/noizlab-effect.mjs photo.jpg out.png --preset FILM --text "夏の終わり|1999"
+  node scripts/noizlab-effect.mjs --video 1.png 2.png 3.png ending.mp4 --preset FILM --ratio 16:9 --transition dissolve`);
   process.exit(code);
 }
 
 function parseArgs(argv) {
   const positional = [];
-  const opts = { preset: "CINEMA", ratio: "original", text: "", chrome: "" };
+  const opts = {
+    preset: "CINEMA", ratio: "original", text: "", chrome: "",
+    video: false, transition: "glitch", hold: 1.4, duration: 0.8, zoom: true,
+  };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "-h" || arg === "--help") usage();
+    if (arg === "--video") { opts.video = true; continue; }
+    if (arg === "--no-zoom") { opts.zoom = false; continue; }
     if (arg === "--list-presets") {
       console.log(PRESETS.join("\n"));
       process.exit(0);
     }
-    if (["--preset", "--ratio", "--text", "--chrome"].includes(arg)) {
+    if (["--preset", "--ratio", "--text", "--chrome", "--transition", "--hold", "--duration"].includes(arg)) {
       if (argv[i + 1] == null) throw new Error(`${arg} requires a value`);
       opts[arg.slice(2)] = argv[++i];
       continue;
@@ -49,14 +62,26 @@ function parseArgs(argv) {
     if (arg.startsWith("-")) throw new Error(`Unknown option: ${arg}`);
     positional.push(arg);
   }
-  if (positional.length !== 2) usage(1);
-  opts.input = resolve(positional[0]);
-  opts.output = resolve(positional[1]);
+  if ((!opts.video && positional.length !== 2) || (opts.video && (positional.length < 3 || positional.length > 9))) usage(1);
+  opts.inputs = (opts.video ? positional.slice(0, -1) : positional.slice(0, 1)).map((p) => resolve(p));
+  opts.input = opts.inputs[0];
+  opts.output = resolve(positional.at(-1));
   opts.preset = opts.preset.toUpperCase();
   if (!PRESETS.includes(opts.preset)) throw new Error(`Unknown preset: ${opts.preset}`);
   if (!(opts.ratio in RATIOS)) throw new Error(`Unknown ratio: ${opts.ratio}`);
-  if (!existsSync(opts.input)) throw new Error(`Input file not found: ${opts.input}`);
-  if (extname(opts.output).toLowerCase() !== ".png") throw new Error("Output must end in .png");
+  for (const input of opts.inputs) {
+    if (!existsSync(input)) throw new Error(`Input file not found: ${input}`);
+  }
+  const outExt = extname(opts.output).toLowerCase();
+  if (!opts.video && outExt !== ".png") throw new Error("Image output must end in .png");
+  if (opts.video && ![".mp4", ".webm"].includes(outExt)) throw new Error("Video output must end in .mp4 or .webm");
+  if (!TRANSITIONS.includes(opts.transition)) {
+    throw new Error(`Unknown transition: ${opts.transition}`);
+  }
+  opts.hold = Number(opts.hold);
+  opts.duration = Number(opts.duration);
+  if (!(opts.hold >= 0.3 && opts.hold <= 3)) throw new Error("--hold must be between 0.3 and 3");
+  if (!(opts.duration >= 0.2 && opts.duration <= 2)) throw new Error("--duration must be between 0.2 and 2");
   return opts;
 }
 
@@ -182,6 +207,9 @@ async function main() {
     "--headless=new",
     "--enable-unsafe-swiftshader",
     "--disable-background-networking",
+    "--disable-background-timer-throttling",
+    "--disable-backgrounding-occluded-windows",
+    "--disable-renderer-backgrounding",
     "--disable-default-apps",
     "--disable-extensions",
     "--disable-sync",
@@ -226,14 +254,52 @@ async function main() {
       return true;
     })()`);
     await delay(500);
-    await evalJs(cdp, "document.getElementById('btn-save').click(); true");
-
-    const downloaded = await waitFor(async () => {
-      const files = await readdir(downloads);
-      return files.find((name) => name.endsWith(".png")) || null;
-    }, "PNG export", 30_000);
-    await rename(join(downloads, downloaded), opts.output);
-    console.log(`Created ${opts.output} (${opts.preset}, ${opts.ratio})`);
+    if (opts.video) {
+      await evalJs(cdp, "document.getElementById('slide-add').click(); true");
+      await waitFor(() => evalJs(cdp, "document.querySelectorAll('.slide-item').length === 1"), "first video cut");
+      for (let i = 1; i < opts.inputs.length; i++) {
+        const before = i;
+        const extra = await evalJs(cdp, "document.getElementById('transb-input')", false);
+        await cdp.send("DOM.setFileInputFiles", { files: [opts.inputs[i]], objectId: extra.objectId });
+        await waitFor(
+          () => evalJs(cdp, `document.querySelectorAll('.slide-item').length === ${before + 1}`),
+          `video cut ${i + 1}`,
+        );
+      }
+      await evalJs(cdp, `(() => {
+        const mode = ${JSON.stringify(TRANSITIONS.indexOf(opts.transition))};
+        document.querySelector('#trans-mode-seg button[data-mode="' + mode + '"]').click();
+        const hold = document.getElementById('slide-hold');
+        hold.value = ${JSON.stringify(opts.hold)};
+        hold.dispatchEvent(new Event('input', { bubbles: true }));
+        const duration = document.getElementById('trans-duration');
+        duration.value = ${JSON.stringify(opts.duration)};
+        duration.dispatchEvent(new Event('input', { bubbles: true }));
+        const zoom = document.getElementById('chk-zoom');
+        if (zoom.checked !== ${JSON.stringify(opts.zoom)}) zoom.click();
+        document.getElementById('btn-transition').click();
+        return true;
+      })()`);
+      const downloaded = await waitFor(async () => {
+        const files = await readdir(downloads);
+        return files.find((name) => /\.(mp4|webm)$/i.test(name)) || null;
+      }, "video export", 90_000);
+      const actualExt = extname(downloaded).toLowerCase();
+      const requestedExt = extname(opts.output).toLowerCase();
+      const finalOutput = actualExt === requestedExt
+        ? opts.output
+        : opts.output.slice(0, -requestedExt.length) + actualExt;
+      await rename(join(downloads, downloaded), finalOutput);
+      console.log(`Created ${finalOutput} (${opts.inputs.length} cuts, ${opts.transition}, ${opts.preset}, ${opts.ratio})`);
+    } else {
+      await evalJs(cdp, "document.getElementById('btn-save').click(); true");
+      const downloaded = await waitFor(async () => {
+        const files = await readdir(downloads);
+        return files.find((name) => name.endsWith(".png")) || null;
+      }, "PNG export", 30_000);
+      await rename(join(downloads, downloaded), opts.output);
+      console.log(`Created ${opts.output} (${opts.preset}, ${opts.ratio})`);
+    }
   } finally {
     cdp?.close();
     if (child.exitCode === null) {

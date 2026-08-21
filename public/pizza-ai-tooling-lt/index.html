@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#0d0f12" />
+  <title>自分の仕事をソフトウェア化する — PIZZA会</title>
+  <meta name="description" content="AIと作る、自分専用の道具たち。PIZZA会 LT資料。" />
+  <link rel="stylesheet" href="deck.css" />
+</head>
+<body>
+  <main class="deck" aria-live="polite">
+    <section class="slide active" data-accent="blue" aria-label="1枚目">
+      <div class="eyebrow">PIZZA会 · 個人開発</div>
+      <div class="title-grid">
+        <div>
+          <h1>自分の仕事を<br />ソフトウェア化する</h1>
+          <p class="lead">AIと作る、自分専用の道具たち</p>
+          <div class="accent-line"></div>
+          <p class="mono muted">quick_todo&nbsp;&nbsp;·&nbsp;&nbsp;image_effector&nbsp;&nbsp;·&nbsp;&nbsp;mobile-ux-handy-editor</p>
+        </div>
+        <div class="black-totem">
+          <strong>欲しい<br />道具がない</strong>
+          <span>↓</span>
+          <strong>AIと<br />つくる</strong>
+        </div>
+      </div>
+      <footer>PIZZA会 · 2026.08.21</footer>
+    </section>
+
+    <section class="slide" data-accent="blue" aria-label="2枚目">
+      <div class="eyebrow">01 · THESIS</div>
+      <h2>AIにコードを書かせる話ではない</h2>
+      <div class="split claim-split">
+        <div>
+          <p class="claim">自分の「こうしたい」を、<br />触れる道具に変える話。</p>
+          <p class="lead muted">既存ツールの高機能さではなく、<br />自分の作業に残る小さな摩擦を消す。</p>
+        </div>
+        <div class="friction-card">
+          <strong>小さな不満</strong>
+          <p>入力が遅い<br />同じ作業が多い<br />触った感触を伝えにくい</p>
+          <span>↓</span>
+          <b>専用の道具</b>
+        </div>
+      </div>
+      <footer>PIZZA会 · 2026.08.21</footer>
+    </section>
+
+    <section class="slide" data-accent="cyan" aria-label="3枚目">
+      <div class="eyebrow">02 · METHOD</div>
+      <h2>仕様書より先に、触れるものを作る</h2>
+      <p class="subclaim">開発の単位は「機能」ではなく、<br />一つの違和感でした。</p>
+      <div class="process">
+        <div><i>01</i><b>小さな不満</b><span>ここが毎回面倒</span></div>
+        <div><i>02</i><b>言語化</b><span>こう操作したい</span></div>
+        <div><i>03</i><b>AIと実装</b><span>まず動く形へ</span></div>
+        <div><i>04</i><b>実際に触る</b><span>違和感を探す</span></div>
+        <div class="hot"><i>05</i><b>また直す</b><span>気持ちよさを詰める</span></div>
+      </div>
+      <p class="takeaway">「作る → 触る → 直す」が、仕様を育てる。</p>
+      <footer>PIZZA会 · 2026.08.21</footer>
+    </section>
+
+    <section class="slide" data-accent="blue" aria-label="4枚目">
+      <div class="eyebrow">03 · EXAMPLE 01</div>
+      <h2>quick_todo — 考える前に、捕まえる</h2>
+      <div class="split">
+        <div>
+          <p class="subclaim">思いつきを逃さず、<br />あとから操作で整理する。</p>
+          <p class="lead muted">入力・移動・完了・調査を、<br />自分の手癖に合わせて設計。</p>
+          <p class="small-accent">Vimのルールを、Todoの文脈へ</p>
+          <div class="key-row"><kbd>j / k</kbd><kbd>dd</kbd><kbd>yy / p</kbd><kbd class="orange">?</kbd></div>
+        </div>
+        <figure class="app-demo blue-demo">
+          <video class="demo-video" src="assets/recordings/quick-todo-pane-demo.mp4" muted loop playsinline preload="metadata"></video>
+          <figcaption><b>実機録画</b><span>入力まで、数秒。</span></figcaption>
+        </figure>
+      </div>
+      <footer>PIZZA会 · 2026.08.21</footer>
+    </section>
+
+    <section class="slide" data-accent="orange" aria-label="5枚目">
+      <div class="eyebrow">04 · EXAMPLE 02</div>
+      <h2>image_effector — 試行錯誤を、作品にする</h2>
+      <div class="split media-split">
+        <div>
+          <p class="subclaim">加工だけではなく、<br />生成・動画化・共有まで一つに。</p>
+          <p class="mono muted">ブラウザ内 WebGL2 / AIシーン生成 / GIF・MP4出力</p>
+          <p class="orange-claim">AIは完成品を返すだけでなく、<br />試行錯誤の速度を上げる。</p>
+        </div>
+        <div>
+          <div class="scene-pair">
+            <img src="assets/scene-sakura.png" alt="桜舞う神社の生成シーン" />
+            <img src="assets/scene-fireworks.png" alt="湖上の花火の生成シーン" />
+          </div>
+          <div class="orange-note">
+            <b>日本語の指示 → AIがシーンJSON → Canvas描画</b>
+            <span>「桜舞う神社」から、すぐに試せる素材へ。</span>
+          </div>
+        </div>
+      </div>
+      <footer>PIZZA会 · 2026.08.21</footer>
+    </section>
+
+    <section class="slide" data-accent="violet" aria-label="6枚目">
+      <div class="eyebrow">05 · EXAMPLE 03</div>
+      <h2>mobile-ux-handy-editor — 触れる仕様書</h2>
+      <div class="split demo-split">
+        <div>
+          <p class="subclaim">見た目だけでなく、<br />触った感触まで共有する。</p>
+          <p class="lead muted">Figmaの前後にある「触る・直す・伝える」を一つに。</p>
+          <div class="three-stage compact-stages">
+            <div class="lavender"><b>意図</b><span>言葉にする</span></div>
+            <div class="pale-blue"><b>プロトタイプ</b><span>すぐ触る</span></div>
+            <div class="mint"><b>実装</b><span>差分追従</span></div>
+          </div>
+          <div class="black-band demo-band">実行可能な仕様書 ＋ AIコンパイラ</div>
+        </div>
+        <figure class="app-demo violet-demo">
+          <video class="demo-video" src="assets/recordings/handy-editor-demo.mp4" muted loop playsinline preload="metadata"></video>
+          <figcaption><b>実機録画</b><span>画面を開き、構造を触る。</span></figcaption>
+        </figure>
+      </div>
+      <footer>PIZZA会 · 2026.08.21</footer>
+    </section>
+
+    <section class="slide" data-accent="green" aria-label="7枚目">
+      <div class="eyebrow">06 · PATTERN</div>
+      <h2>別々のアプリではなく、仕事の流れを整備している</h2>
+      <div class="workflow">
+        <article class="pale-blue"><i></i><h3>考える</h3><b>quick_todo</b><p>思考の入口</p></article>
+        <span></span>
+        <article class="pale-orange"><i></i><h3>作る</h3><b>image_effector</b><p>制作の実験場</p></article>
+        <span></span>
+        <article class="lavender"><i></i><h3>試す・伝える</h3><b>handy-editor</b><p>仕様と実装の接点</p></article>
+      </div>
+      <p class="green-claim">個人開発の対象は、アプリではなく自分の作業環境。</p>
+      <footer>PIZZA会 · 2026.08.21</footer>
+    </section>
+
+    <section class="slide" data-accent="blue" aria-label="8枚目">
+      <div class="eyebrow">07 · AGENTS</div>
+      <h2>Codex vs Claude Codeは、勝敗より役割で見る</h2>
+      <div class="split table-split">
+        <div>
+          <p class="subclaim">同じ要件を渡して、<br />開発ループのどこで強いかを見る</p>
+          <div class="blue-note">ツール比較を、実際の開発文脈に置く。</div>
+        </div>
+        <table>
+          <thead><tr><th>比較軸</th><th>任せたいこと</th><th>人が判断すること</th></tr></thead>
+          <tbody>
+            <tr><th>探索</th><td>既存コードの理解</td><td>どこを触るか</td></tr>
+            <tr><th>実装</th><td>複数ファイルの変更</td><td>まず動く形</td></tr>
+            <tr><th>調整</th><td>UI・操作感の修正</td><td>触って違うを直す</td></tr>
+            <tr><th>検証</th><td>テスト・ビルド</td><td>壊さず届ける</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <footer>PIZZA会 · 2026.08.21</footer>
+    </section>
+
+    <section class="slide" data-accent="orange" aria-label="9枚目">
+      <div class="eyebrow">08 · FRICTION</div>
+      <h2>AIと作るほど、削る判断が重要になる</h2>
+      <div class="split">
+        <p class="subclaim">機能は増やせる。<br />でも、使いやすさは増えない。</p>
+        <ul class="dot-list">
+          <li>要望が機能増殖する</li>
+          <li>局所修正で全体UXが崩れる</li>
+          <li>設定・保存・エラー導線が後回しになる</li>
+        </ul>
+      </div>
+      <div class="orange-note wide"><b>自分が決めること</b><span>何が面倒か&nbsp;&nbsp;·&nbsp;&nbsp;どう触りたいか&nbsp;&nbsp;·&nbsp;&nbsp;何を削るか&nbsp;&nbsp;·&nbsp;&nbsp;本当に使うか</span></div>
+      <footer>PIZZA会 · 2026.08.21</footer>
+    </section>
+
+    <section class="slide" data-accent="cyan" aria-label="10枚目">
+      <div class="eyebrow">09 · TAKEAWAY</div>
+      <h2>明日から使えるのは、ツールより見つけ方</h2>
+      <div class="takeaway-layout">
+        <ol>
+          <li><b>毎日繰り返す面倒を一つ選ぶ</b><span>大きなプロダクトではなく、10秒の摩擦から始める。</span></li>
+          <li><b>欲しい操作を具体的に言う</b><span>「便利に」ではなく「このキーで、ここへ移動したい」。</span></li>
+          <li><b>触って違和感を返す</b><span>AIに正解を当てさせるのではなく、ループを速くする。</span></li>
+        </ol>
+        <div class="black-totem compact"><span>摩擦</span><i>↓</i><strong>道具</strong></div>
+      </div>
+      <footer>PIZZA会 · 2026.08.21</footer>
+    </section>
+
+    <section class="slide dark-slide" data-accent="cyan" aria-label="11枚目">
+      <div class="eyebrow">まとめ</div>
+      <p class="final-claim">AIは、<br />自分専用の道具を作る<br />設計パートナーになった。</p>
+      <div class="accent-line"></div>
+      <p class="cyan-words">考える&nbsp;&nbsp;·&nbsp;&nbsp;作る&nbsp;&nbsp;·&nbsp;&nbsp;試す</p>
+      <div class="closing-row"><span>ありがとうございました</span><span>質問・自分用ツールの話</span></div>
+      <footer>PIZZA会 · 個人開発とAI</footer>
+    </section>
+
+    <section class="slide video-slide" data-accent="cyan" aria-label="12枚目">
+      <video id="ending-video" src="assets/ending-variety.mp4" preload="auto" playsinline muted></video>
+      <div class="video-vignette"></div>
+      <div class="video-intro"><span>欲しい道具がない。</span><strong>だから、つくる。</strong></div>
+      <div class="video-outro"><span>考える · 作る · 試す</span><strong>自分の摩擦を、<br />自分の道具へ。</strong><small>クリック / R でもう一度再生</small></div>
+    </section>
+  </main>
+
+  <div class="chrome" aria-hidden="true">
+    <div class="progress"><i></i></div>
+    <span class="counter">01 / 12</span>
+    <span class="hint">← → / SPACE &nbsp; F: FULLSCREEN</span>
+  </div>
+  <button class="nav prev" aria-label="前のスライド"></button>
+  <button class="nav next" aria-label="次のスライド"></button>
+  <script src="deck.js"></script>
+</body>
+</html>

@@ -57,7 +57,7 @@ in vec2 v_uv; out vec4 o;
 uniform sampler2D u_a;
 uniform sampler2D u_b;
 uniform float u_t;     // 0=A → 1=B
-uniform int u_mode;    // 0:fade 1:wipe 2:dissolve 3:glitch
+uniform int u_mode;    // 0:fade 1:wipe 2:dissolve 3:glitch 4:punch 5:flash 6:push 7:film burn
 uniform vec2 u_res;
 uniform float u_seed2;
 uniform float u_zoomA; // Ken Burnsズーム倍率（1で等倍）
@@ -79,7 +79,7 @@ void main() {
   } else if (u_mode == 2) {
     float r = th2(floor(uv * u_res / 16.0));
     o = mix(A, B, step(r, t));
-  } else {
+  } else if (u_mode == 3) {
     float band = floor(uv.y * 36.0);
     float jit = th(band + floor(t * 24.0)) - 0.5;
     float p = sin(t * 3.14159);
@@ -93,6 +93,41 @@ void main() {
     vec2 buv = clamp(duv - vec2(amt * 0.03, 0.0), 0.0, 1.0);
     o.r = mix(sA(ruv), sB(ruv), m).r;
     o.b = mix(sA(buv), sB(buv), m).b;
+  } else if (u_mode == 4) {
+    // パンチズーム: Aへ寄りながらBが奥から定位置へ着地
+    float e = smoothstep(0.18, 0.82, t);
+    float za = u_zoomA * (1.0 + 0.42 * t);
+    float zb = u_zoomB * mix(0.70, 1.0, smoothstep(0.0, 0.9, t));
+    vec2 auv = clamp(0.5 + (uv - 0.5) / za, 0.0, 1.0);
+    vec2 buv = clamp(0.5 + (uv - 0.5) / zb, 0.0, 1.0);
+    vec4 ca = texture(u_a, auv);
+    vec4 cb = texture(u_b, buv);
+    float radial = (1.0 - smoothstep(0.05, 0.76, length(uv - 0.5))) * sin(t * 3.14159) * 0.12;
+    o = mix(ca, cb, clamp(e + radial, 0.0, 1.0));
+  } else if (u_mode == 5) {
+    // フラッシュ: 露出オーバーの短い発光で継ぎ目を隠す
+    float e = smoothstep(0.32, 0.68, t);
+    float flash = pow(sin(t * 3.14159), 8.0);
+    o = mix(A, B, e);
+    o.rgb = mix(o.rgb, vec3(1.0, 0.97, 0.90), flash * 0.92);
+  } else if (u_mode == 6) {
+    // プッシュ: Aを左へ押し出し、Bを右から入れる
+    vec2 auv = vec2(uv.x + t, uv.y);
+    vec2 buv = vec2(uv.x - (1.0 - t), uv.y);
+    vec4 ca = sA(clamp(auv, 0.0, 1.0));
+    vec4 cb = sB(clamp(buv, 0.0, 1.0));
+    float seam = smoothstep(-0.008, 0.008, uv.x - (1.0 - t));
+    o = mix(ca, cb, seam);
+    o.rgb *= 1.0 - 0.12 * exp(-abs(uv.x - (1.0 - t)) * 65.0);
+  } else {
+    // フィルムバーン: 粒状の露光境界と暖色の焼け
+    float n = th2(floor(uv * u_res / 10.0));
+    float sweep = uv.x * 0.76 + uv.y * 0.24 + (n - 0.5) * 0.20;
+    float edgeAt = t * 1.18 - 0.09;
+    float reveal = smoothstep(edgeAt - 0.06, edgeAt + 0.06, sweep);
+    float edge = 1.0 - smoothstep(0.015, 0.13, abs(sweep - edgeAt));
+    o = mix(B, A, reveal);
+    o.rgb += edge * vec3(1.15, 0.34, 0.035) * (0.75 + n * 0.45);
   }
 }`;
 
@@ -1084,7 +1119,7 @@ document.getElementById("btn-save").addEventListener("click", () => {
 // ---------------------------------------------------------------- ショート動画（カット列＋トランジション）
 
 const MAX_SLIDES = 8;
-const slides = []; // {bmp, tex, thumb, recipe, override, textTex}
+const slides = []; // image:{bmp} / video:{video,objectUrl,trimStart,trimEnd} + texture/recipe
 const seqState = { mode: 3, hold: 1.0, trans: 0.6, zoom: true, percut: true };
 let seqPlaying = null; // {start, hold, trans, blit, onend}
 let seqFrame = null;   // 再生中のフレーム情報 {texA, texB, t, zoomA, zoomB}
@@ -1126,37 +1161,83 @@ function overrideFor(aIdx, bIdx, t) {
 const transBtn = document.getElementById("btn-transition");
 const transNote = document.getElementById("trans-note");
 const slideStrip = document.getElementById("slide-strip");
+const clipTrim = document.getElementById("clip-trim");
+const clipTrimStart = document.getElementById("clip-trim-start");
+const clipTrimEnd = document.getElementById("clip-trim-end");
+let selectedSlide = -1;
 
 // 経過時間から「どのカット同士を、どの遷移位置・ズームで描くか」を純粋計算する
+function slideDurationMs(s, imageHoldMs = seqState.hold * 1000) {
+  return s?.kind === "video"
+    ? Math.max(100, (s.trimEnd - s.trimStart) * 1000)
+    : imageHoldMs;
+}
+
 function seqAt(elapsed, n, holdMs, transMs, zoomOn) {
-  const per = holdMs + transMs;
-  const i = Math.min(n - 1, Math.floor(elapsed / per));
-  let t = 0;
-  const inSeg = elapsed - i * per;
-  if (i < n - 1 && inSeg > holdMs) t = Math.min(1, (inSeg - holdMs) / transMs);
-  const zprog = (k) =>
-    Math.min(1, Math.max(0, (elapsed - k * per + transMs) / (holdMs + 2 * transMs)));
-  const zf = (k) =>
-    !zoomOn ? 1 : k % 2 === 0 ? 1 + 0.08 * zprog(k) : 1.08 - 0.08 * zprog(k);
-  const j = Math.min(n - 1, i + 1);
-  return { a: i, b: j, t, zoomA: zf(i), zoomB: zf(j) };
+  let cursor = 0;
+  for (let i = 0; i < n; i++) {
+    const dur = slideDurationMs(slides[i], holdMs);
+    const local = elapsed - cursor;
+    const zoom = (k, p) => !zoomOn ? 1 : k % 2 === 0 ? 1 + 0.08 * p : 1.08 - 0.08 * p;
+    if (local <= dur || i === n - 1) {
+      const p = Math.min(1, Math.max(0, local / Math.max(1, dur)));
+      return { a: i, b: i, t: 0, zoomA: zoom(i, p), zoomB: zoom(i, p), localA: Math.max(0, local), localB: 0 };
+    }
+    cursor += dur;
+    if (i < n - 1 && elapsed <= cursor + transMs) {
+      const t = Math.min(1, Math.max(0, (elapsed - cursor) / Math.max(1, transMs)));
+      return { a: i, b: i + 1, t, zoomA: zoom(i, 1), zoomB: zoom(i + 1, t), localA: dur, localB: t * transMs };
+    }
+    cursor += transMs;
+  }
+  const last = n - 1;
+  return { a: last, b: last, t: 0, zoomA: 1, zoomB: 1, localA: slideDurationMs(slides[last], holdMs), localB: 0 };
 }
 
 function uploadSlide(s) {
-  if (!s.bmp || !W || !H) return;
+  const source = s.kind === "video" ? s.video : s.bmp;
+  const sourceW = s.kind === "video" ? s.video?.videoWidth : s.bmp?.width;
+  const sourceH = s.kind === "video" ? s.video?.videoHeight : s.bmp?.height;
+  if (!source || !sourceW || !sourceH || !W || !H) return;
   // 編集画像の解像度にカバークロップして揃える
-  const c = document.createElement("canvas");
+  const c = s.mediaCanvas || document.createElement("canvas");
+  s.mediaCanvas = c;
   c.width = W;
   c.height = H;
   const ctx = c.getContext("2d");
-  const sc = Math.max(W / s.bmp.width, H / s.bmp.height);
-  const dw = s.bmp.width * sc;
-  const dh = s.bmp.height * sc;
-  ctx.drawImage(s.bmp, (W - dw) / 2, (H - dh) / 2, dw, dh);
+  const sc = Math.max(W / sourceW, H / sourceH);
+  const dw = sourceW * sc;
+  const dh = sourceH * sc;
+  ctx.drawImage(source, (W - dw) / 2, (H - dh) / 2, dw, dh);
   gl.bindTexture(gl.TEXTURE_2D, s.tex);
   gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
   gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, c);
   gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+}
+
+function syncSequenceMedia(frameInfo) {
+  const active = new Set([frameInfo.a, frameInfo.b]);
+  slides.forEach((s, i) => {
+    if (s.kind !== "video") return;
+    if (!active.has(i)) {
+      if (!s.video.paused) s.video.pause();
+      return;
+    }
+    const localMs = i === frameInfo.a ? frameInfo.localA : frameInfo.localB;
+    const wanted = Math.min(s.trimEnd, s.trimStart + Math.max(0, localMs) / 1000);
+    if (Math.abs(s.video.currentTime - wanted) > 0.28) s.video.currentTime = wanted;
+    if (wanted >= s.trimEnd - 0.04) {
+      s.video.pause();
+      if (Math.abs(s.video.currentTime - s.trimEnd) > 0.04) s.video.currentTime = s.trimEnd;
+    } else if (s.video.paused) {
+      s.video.play().catch(() => {});
+    }
+    if (s.video.readyState >= 2) uploadSlide(s);
+  });
+}
+
+function pauseSequenceVideos() {
+  slides.forEach((s) => { if (s.kind === "video") s.video.pause(); });
 }
 
 function uploadAllSlides() {
@@ -1167,7 +1248,8 @@ function uploadAllSlides() {
 }
 
 function seqTotalSec() {
-  return slides.length * seqState.hold + Math.max(0, slides.length - 1) * seqState.trans;
+  return slides.reduce((sum, s) => sum + slideDurationMs(s) / 1000, 0) +
+    Math.max(0, slides.length - 1) * seqState.trans;
 }
 
 function updateSeqNote() {
@@ -1183,15 +1265,20 @@ function renderSlideStrip() {
   slideStrip.innerHTML = "";
   slides.forEach((s, i) => {
     const d = document.createElement("div");
-    d.className = "slide-item";
+    d.className = `slide-item${selectedSlide === i ? " selected" : ""}`;
     d.draggable = true;
     d.innerHTML =
       `<img src="${s.thumb}" alt="カット${i + 1}" />` +
-      `<button class="work-del" title="削除">✕</button><span class="slide-num">${i + 1}</span>`;
+      `<button class="work-del" title="削除">✕</button><span class="slide-num">${i + 1}</span>` +
+      (s.kind === "video" ? `<span class="slide-kind">VIDEO</span>` : "");
+    d.querySelector("img").addEventListener("click", () => selectSlide(i));
     d.querySelector("button").addEventListener("click", () => {
       gl.deleteTexture(slides[i].tex);
       if (slides[i].textTex) gl.deleteTexture(slides[i].textTex);
+      if (slides[i].objectUrl) URL.revokeObjectURL(slides[i].objectUrl);
       slides.splice(i, 1);
+      selectedSlide = -1;
+      clipTrim.hidden = true;
       renderSlideStrip();
     });
     // ドラッグでカットの並び替え
@@ -1213,12 +1300,49 @@ function renderSlideStrip() {
   updateSeqNote();
 }
 
-async function addSlideBitmap(bmp, recipe = null) {
+function selectSlide(i) {
+  selectedSlide = i;
+  const s = slides[i];
+  clipTrim.hidden = s?.kind !== "video";
+  if (s?.kind === "video") {
+    document.getElementById("clip-trim-name").textContent = s.name || `動画 ${i + 1}`;
+    document.getElementById("clip-trim-length").textContent = `${s.duration.toFixed(1)}s`;
+    clipTrimStart.max = Math.max(0, s.duration - 0.1);
+    clipTrimEnd.max = s.duration;
+    clipTrimStart.value = s.trimStart.toFixed(1);
+    clipTrimEnd.value = s.trimEnd.toFixed(1);
+  }
+  renderSlideStrip();
+}
+
+function canvasBlob(canvasEl, type = "image/webp", quality = 0.92) {
+  return new Promise((resolve) => canvasEl.toBlob(resolve, type, quality));
+}
+
+async function bitmapBlob(bmp) {
+  const c = document.createElement("canvas");
+  c.width = bmp.width; c.height = bmp.height;
+  c.getContext("2d").drawImage(bmp, 0, 0);
+  return canvasBlob(c);
+}
+
+async function ensureEditorBase(source) {
+  if (originalData) return;
+  const sw = source.videoWidth || source.width;
+  const sh = source.videoHeight || source.height;
+  const c = document.createElement("canvas");
+  c.width = sw; c.height = sh;
+  c.getContext("2d").drawImage(source, 0, 0, sw, sh);
+  await loadBlob(await canvasBlob(c, "image/png"));
+}
+
+async function addSlideBitmap(bmp, recipe = null, sourceBlob = null) {
   if (slides.length >= MAX_SLIDES) {
     transNote.textContent = `カットは最大${MAX_SLIDES}枚までです。`;
     return;
   }
-  const s = { bmp, tex: makeTex(), thumb: null, recipe, override: null, textTex: null };
+  await ensureEditorBase(bmp);
+  const s = { kind: "image", bmp, sourceBlob: sourceBlob || await bitmapBlob(bmp), tex: makeTex(), thumb: null, recipe, override: null, textTex: null };
   uploadSlide(s);
   buildSlideOverride(s);
   const tc = document.createElement("canvas");
@@ -1232,6 +1356,56 @@ async function addSlideBitmap(bmp, recipe = null) {
   renderSlideStrip();
 }
 
+function videoReady(video) {
+  if (video.readyState >= 1 && Number.isFinite(video.duration)) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    video.addEventListener("loadedmetadata", resolve, { once: true });
+    video.addEventListener("error", reject, { once: true });
+  });
+}
+
+function seekVideo(video, time) {
+  if (Math.abs(video.currentTime - time) < 0.01 && video.readyState >= 2) return Promise.resolve();
+  return new Promise((resolve) => {
+    video.addEventListener("seeked", resolve, { once: true });
+    video.currentTime = time;
+  });
+}
+
+async function addSlideVideo(blob, saved = {}) {
+  if (slides.length >= MAX_SLIDES) {
+    transNote.textContent = `カットは最大${MAX_SLIDES}個までです。`;
+    return;
+  }
+  const objectUrl = URL.createObjectURL(blob);
+  const video = document.createElement("video");
+  video.src = objectUrl;
+  video.preload = "auto";
+  video.muted = true;
+  video.playsInline = true;
+  await videoReady(video);
+  const duration = Number.isFinite(video.duration) ? video.duration : 0;
+  if (!duration) { URL.revokeObjectURL(objectUrl); throw new Error("Empty video"); }
+  const trimStart = Math.min(Math.max(0, saved.trimStart || 0), Math.max(0, duration - 0.1));
+  const trimEnd = Math.min(duration, Math.max(trimStart + 0.1, saved.trimEnd || Math.min(duration, 10)));
+  await seekVideo(video, trimStart);
+  await ensureEditorBase(video);
+  const tc = document.createElement("canvas");
+  tc.width = 96; tc.height = 64;
+  const sc = Math.max(96 / video.videoWidth, 64 / video.videoHeight);
+  tc.getContext("2d").drawImage(video, (96 - video.videoWidth * sc) / 2, (64 - video.videoHeight * sc) / 2, video.videoWidth * sc, video.videoHeight * sc);
+  const s = {
+    kind: "video", video, objectUrl, sourceBlob: blob, name: saved.name || blob.name || "video",
+    duration, trimStart, trimEnd, tex: makeTex(), thumb: tc.toDataURL(), recipe: saved.recipe || null,
+    override: null, textTex: null, mediaCanvas: null,
+  };
+  uploadSlide(s);
+  buildSlideOverride(s);
+  slides.push(s);
+  selectedSlide = slides.length - 1;
+  selectSlide(selectedSlide);
+}
+
 document.getElementById("slide-add").addEventListener("click", async () => {
   if (!originalData) return;
   // カットごとの設定用に、いまのラック設定+文字をレシピとして記録する。
@@ -1243,24 +1417,133 @@ document.getElementById("slide-add").addEventListener("click", async () => {
     const hi = Math.max(state.sortLow, state.sortHigh);
     data = pixelSorted(originalData, lo, hi, state.sortVert === 1);
   }
-  addSlideBitmap(await createImageBitmap(data), rec);
+  await addSlideBitmap(await createImageBitmap(data), rec);
 });
 const transbInput = document.getElementById("transb-input");
 document.getElementById("slide-add-file").addEventListener("click", () => transbInput.click());
 transbInput.addEventListener("change", async () => {
-  const f = transbInput.files[0];
+  const files = [...transbInput.files];
   transbInput.value = "";
-  if (!f) return;
-  try {
-    addSlideBitmap(await createImageBitmap(f));
-  } catch {
-    transNote.textContent = t("画像を読み込めませんでした。");
+  if (!files.length) return;
+  for (const f of files.slice(0, MAX_SLIDES - slides.length)) {
+    try {
+      if (f.type.startsWith("video/")) await addSlideVideo(f, { name: f.name });
+      else await addSlideBitmap(await createImageBitmap(f), null, f);
+    } catch {
+      transNote.textContent = t(`${f.name}を読み込めませんでした。`);
+    }
   }
 });
 
-document.getElementById("trans-mode-seg").querySelectorAll("button").forEach((b, i) => {
+async function applyTrimInputs() {
+  const s = slides[selectedSlide];
+  if (s?.kind !== "video") return;
+  let start = Math.min(s.duration - 0.1, Math.max(0, Number(clipTrimStart.value) || 0));
+  let end = Math.min(s.duration, Math.max(start + 0.1, Number(clipTrimEnd.value) || s.duration));
+  if (end <= start) end = Math.min(s.duration, start + 0.1);
+  s.trimStart = start;
+  s.trimEnd = end;
+  clipTrimStart.value = start.toFixed(1);
+  clipTrimEnd.value = end.toFixed(1);
+  await seekVideo(s.video, start);
+  uploadSlide(s);
+  updateSeqNote();
+  markDirty();
+}
+clipTrimStart.addEventListener("change", applyTrimInputs);
+clipTrimEnd.addEventListener("change", applyTrimInputs);
+
+// ---- ローカルプロジェクト（素材Blob + 編集内容をIndexedDBへ保存）
+const projectNote = document.getElementById("project-note");
+const PROJECT_DB = "noiz-lab-projects";
+function openProjectDb() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(PROJECT_DB, 1);
+    req.onupgradeneeded = () => req.result.createObjectStore("projects", { keyPath: "id" });
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+async function projectStore(mode, work) {
+  const db = await openProjectDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction("projects", mode);
+    const result = work(tx.objectStore("projects"));
+    tx.oncomplete = () => { db.close(); resolve(result?.result); };
+    tx.onerror = () => { db.close(); reject(tx.error); };
+  });
+}
+async function saveProject() {
+  if (!slides.length) {
+    projectNote.textContent = "先に画像か動画を追加してください。";
+    return;
+  }
+  const record = {
+    id: "latest", version: 1, updatedAt: Date.now(),
+    seqState: { ...seqState }, editorRecipe: currentRecipe(),
+    slides: slides.map((s) => ({
+      kind: s.kind, blob: s.sourceBlob, recipe: s.recipe, name: s.name || null,
+      trimStart: s.trimStart ?? null, trimEnd: s.trimEnd ?? null,
+    })),
+  };
+  try {
+    await projectStore("readwrite", (store) => store.put(record));
+    projectNote.textContent = `保存しました · ${new Date(record.updatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+  } catch {
+    projectNote.textContent = "保存できませんでした。ブラウザの保存領域を確認してください。";
+  }
+}
+function clearSequence() {
+  for (const s of slides) {
+    gl.deleteTexture(s.tex);
+    if (s.textTex) gl.deleteTexture(s.textTex);
+    if (s.objectUrl) URL.revokeObjectURL(s.objectUrl);
+  }
+  slides.splice(0);
+  selectedSlide = -1;
+  clipTrim.hidden = true;
+}
+async function loadProject() {
+  try {
+    const record = await projectStore("readonly", (store) => store.get("latest"));
+    if (!record?.slides?.length) {
+      projectNote.textContent = "保存されたプロジェクトはありません。";
+      return;
+    }
+    clearSequence();
+    originalData = null;
+    baseData = null;
+    Object.assign(seqState, record.seqState || {});
+    if (record.editorRecipe) applyRecipeObject({
+      e: record.editorRecipe.enabled, s: record.editorRecipe.state,
+      seed: record.editorRecipe.seed, t: record.editorRecipe.text,
+    });
+    document.getElementById("slide-hold").value = seqState.hold;
+    document.getElementById("slide-hold-val").textContent = `${seqState.hold.toFixed(2)}s`;
+    document.getElementById("trans-duration").value = seqState.trans;
+    document.getElementById("trans-duration-val").textContent = `${seqState.trans.toFixed(1)}s`;
+    document.getElementById("chk-zoom").checked = seqState.zoom;
+    document.getElementById("chk-percut").checked = seqState.percut;
+    document.getElementById("trans-mode-seg").querySelectorAll("button").forEach((b) =>
+      b.classList.toggle("sel", Number(b.dataset.mode) === seqState.mode));
+    for (const item of record.slides) {
+      if (item.kind === "video") await addSlideVideo(item.blob, item);
+      else await addSlideBitmap(await createImageBitmap(item.blob), item.recipe, item.blob);
+    }
+    selectedSlide = -1;
+    clipTrim.hidden = true;
+    renderSlideStrip();
+    projectNote.textContent = `続きを開きました · ${new Date(record.updatedAt).toLocaleString()}`;
+  } catch {
+    projectNote.textContent = "プロジェクトを開けませんでした。";
+  }
+}
+document.getElementById("project-save").addEventListener("click", saveProject);
+document.getElementById("project-load").addEventListener("click", loadProject);
+
+document.getElementById("trans-mode-seg").querySelectorAll("button").forEach((b) => {
   b.addEventListener("click", () => {
-    seqState.mode = i;
+    seqState.mode = Number(b.dataset.mode);
     document.getElementById("trans-mode-seg").querySelectorAll("button")
       .forEach((v) => v.classList.remove("sel"));
     b.classList.add("sel");
@@ -1298,7 +1581,7 @@ function setPreviewMode(on) {
   previewStart = performance.now();
   tabEdit.classList.toggle("sel", !on);
   tabPreview.classList.toggle("sel", on);
-  if (!on) { seqFrame = null; seqOverride = null; }
+  if (!on) { seqFrame = null; seqOverride = null; pauseSequenceVideos(); }
   markDirty();
 }
 tabEdit.addEventListener("click", () => setPreviewMode(false));
@@ -1501,6 +1784,7 @@ async function exportSequence() {
     try { audioSrc?.stop(); } catch { /* 既に終了済みなら無視 */ }
     try { audioCtx?.close(); } catch { /* noop */ }
     seqPlaying = null;
+    pauseSequenceVideos();
     seqFrame = null;
     seqOverride = null;
     markDirty();
@@ -1659,6 +1943,10 @@ function encodeGif(frames, w, h, delayCs) {
 const gifBtn = document.getElementById("btn-gif");
 async function exportGif() {
   if (slides.length < 1 || seqPlaying || !originalData) return;
+  if (slides.some((s) => s.kind === "video")) {
+    transNote.textContent = "動画クリップを含む場合はMP4で書き出してください。GIFは画像カットのみ対応しています。";
+    return;
+  }
   setPreviewMode(false);
   gifBtn.disabled = true;
   transBtn.disabled = true;
@@ -1667,7 +1955,7 @@ async function exportGif() {
     const n = slides.length;
     const holdMs = seqState.hold * 1000;
     const transMs = seqState.trans * 1000;
-    const total = n * holdMs + (n - 1) * transMs;
+    const total = seqTotalSec() * 1000;
     const count = Math.min(240, Math.max(2, Math.round((total / 1000) * fps)));
 
     let sx = 0, sy = 0, sw = canvas.width, sh = canvas.height;
@@ -2356,8 +2644,9 @@ function frame() {
   if (seqPlaying && slides.length) {
     const el = performance.now() - seqPlaying.start;
     const n = slides.length;
-    const total = n * seqPlaying.hold + (n - 1) * seqPlaying.trans;
+    const total = seqTotalSec() * 1000;
     const s = seqAt(Math.min(el, total), n, seqPlaying.hold, seqPlaying.trans, seqState.zoom);
+    syncSequenceMedia(s);
     seqFrame = {
       texA: slides[s.a].tex,
       texB: slides[s.b].tex,
@@ -2379,9 +2668,10 @@ function frame() {
       const n = slides.length;
       const holdMs = seqState.hold * 1000;
       const transMs = seqState.trans * 1000;
-      const total = n * holdMs + (n - 1) * transMs;
+      const total = seqTotalSec() * 1000;
       const el = total > 0 ? (performance.now() - previewStart) % (total + 300) : 0;
       const s = seqAt(Math.min(el, total), n, holdMs, transMs, seqState.zoom);
+      syncSequenceMedia(s);
       seqFrame = {
         texA: slides[s.a].tex,
         texB: slides[s.b].tex,

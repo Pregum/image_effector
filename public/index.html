@@ -152,11 +152,27 @@
 
     <div class="panel-section collapsible collapsed" data-sec="video">
       <h2 class="section-title">VIDEO <span class="jp">／ ショート動画</span></h2>
+      <div class="quick-flow" aria-label="かんたん動画の作り方">
+        <span><b>1</b> 素材</span><i></i><span><b>2</b> 雰囲気</span><i></i><span><b>3</b> 保存</span>
+      </div>
       <div class="slide-strip" id="slide-strip"></div>
       <div class="ai-row">
         <button id="slide-add" class="btn">＋ 今の画像</button>
-        <button id="slide-add-file" class="btn">＋ ファイル</button>
+        <button id="slide-add-file" class="btn">＋ 画像・動画</button>
       </div>
+      <div class="clip-trim" id="clip-trim" hidden>
+        <div class="clip-trim-head"><span id="clip-trim-name">動画クリップ</span><span id="clip-trim-length"></span></div>
+        <div class="clip-trim-fields">
+          <label>開始 <input id="clip-trim-start" type="number" min="0" step="0.1" /></label>
+          <label>終了 <input id="clip-trim-end" type="number" min="0.1" step="0.1" /></label>
+        </div>
+        <p class="text-hint">サムネイルを選ぶとトリムできます。動画音声は現在BGMへ置き換えて書き出します。</p>
+      </div>
+      <div class="ai-row project-row">
+        <button id="project-save" class="btn">▣ プロジェクト保存</button>
+        <button id="project-load" class="btn">↻ 前回の続き</button>
+      </div>
+      <p class="text-hint" id="project-note">このブラウザに素材と編集内容を保存できます。</p>
       <div class="ai-row bpm-row">
         <input id="bpm-input" type="number" min="40" max="220" value="120" title="BPM" />
         <div class="seg bpm-beats" id="bpm-beats">
@@ -169,9 +185,17 @@
         <button id="bgm-clear" class="btn" disabled>クリア</button>
       </div>
       <p class="text-hint" id="bgm-name" hidden></p>
-      <div class="seg" id="trans-mode-seg">
-        <button>フェード</button><button>ワイプ</button><button>ディゾルブ</button><button class="sel">グリッチ</button>
+      <div class="transition-grid" id="trans-mode-seg" aria-label="トランジション">
+        <button data-mode="0">フェード</button>
+        <button data-mode="1">ワイプ</button>
+        <button data-mode="2">ディゾルブ</button>
+        <button data-mode="3" class="sel">グリッチ</button>
+        <button data-mode="4">パンチズーム</button>
+        <button data-mode="5">フラッシュ</button>
+        <button data-mode="6">プッシュ</button>
+        <button data-mode="7">フィルムバーン</button>
       </div>
+      <p class="text-hint transition-hint">すべてNOIZ LAB独自実装。プレビューとMP4/GIF書き出しに反映されます。</p>
       <div class="ctl">
         <div class="ctl-label"><span>各カットの表示</span><span class="val" id="slide-hold-val">1.00s</span></div>
         <input type="range" id="slide-hold" min="0.3" max="3" step="0.05" value="1" />
@@ -200,7 +224,7 @@
 
 <input type="file" id="file-input" accept="image/*" hidden />
 <input type="file" id="overlay-input" accept="image/*" hidden />
-<input type="file" id="transb-input" accept="image/*" hidden />
+<input type="file" id="transb-input" accept="image/*,video/*" multiple hidden />
 <input type="file" id="bgm-input" accept="audio/*" hidden />
 <script type="module" src="/app.js"></script>
 </body>

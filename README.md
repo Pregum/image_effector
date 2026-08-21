@@ -199,6 +199,20 @@ npx wrangler dev      # ローカル（localhost のAIエンドポイントに�
 npx wrangler deploy   # デプロイ
 ```
 
+### Codex / Claude Code から画像を加工
+
+Node.js 22以降とChrome（またはChromium）があれば、npm installなしで既存のWebGL処理をCLIから呼び出せます。
+
+```sh
+node scripts/noizlab-effect.mjs input.jpg output.png --preset CINEMA
+node scripts/noizlab-effect.mjs input.jpg output.png --preset FILM --ratio 9:16 --text '夏の終わり|1999'
+```
+
+利用可能なプリセットは `--list-presets`、全オプションは `--help` で確認できます。
+Codex用のスキルは `.agents/skills/noiz-lab-effects/`、Claude Code用は
+`.claude/skills/noiz-lab-effects/` に同梱しています。「この画像をエモくして」のように指示すると、
+雰囲気に合うプリセットを選んでPNGを書き出します。
+
 ## お金について
 
 作者のインスタンスはCloudflareの無料枠内で動いています。無料枠を超えたAPIは

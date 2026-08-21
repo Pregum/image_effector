@@ -88,6 +88,12 @@ const EN = {
   // --- 動画 ---
   "／ ショート動画": "／ Short video",
   "＋ 今の画像": "＋ Current",
+  "＋ 画像・動画": "＋ Images / videos",
+  "▣ プロジェクト保存": "▣ Save project",
+  "↻ 前回の続き": "↻ Continue latest",
+  "↓ JSON書き出し": "↓ Export JSON",
+  "↑ JSONを開く": "↑ Open JSON",
+  "このブラウザに素材と編集内容を保存できます。": "Save media and edits in this browser.",
   "＋ ファイル": "＋ File",
   "1拍": "1 beat",
   "2拍": "2 beats",

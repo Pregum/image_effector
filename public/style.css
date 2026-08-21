@@ -30,6 +30,34 @@ body {
   overflow-x: hidden;
 }
 
+.file-mode-warning {
+  position: relative;
+  z-index: 1000;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 10px 16px;
+  padding: 10px 22px;
+  border-bottom: 1px solid #785f00;
+  background: #2b2408;
+  color: #fff4b8;
+  font-family: var(--font-mono);
+}
+.file-mode-warning[hidden] { display: none; }
+.file-mode-warning strong { color: var(--acid); }
+.file-mode-warning code {
+  padding: 3px 7px;
+  border: 1px solid #64551a;
+  background: #171304;
+  color: #fff;
+  white-space: nowrap;
+}
+
+@media (max-width: 900px) {
+  .file-mode-warning { grid-template-columns: 1fr; }
+  .file-mode-warning code { width: max-content; max-width: 100%; overflow-x: auto; }
+}
+
 /* 画面全体にうっすらCRT走査線 */
 .crt-overlay {
   position: fixed; inset: 0; z-index: 999; pointer-events: none;

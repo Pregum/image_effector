@@ -168,6 +168,7 @@ AI_MODEL_EMBED=bge-m3
 | ショート動画 | 画像・動画を最大8カット。動画トリム + オリジナルトランジション8種 + Ken Burnsズーム。9:16等のクロップ・長辺1280px・MP4(H.264)優先。カットごとにエフェクトを記憶 |
 | BGM・BPM同期 | 音声をAACトラックとして合成。読み込み時にBPMを自動検出し拍に合わせたカット割りに |
 | プロジェクト保存 | 素材Blobと編集内容をブラウザのIndexedDBに保存し、「前回の続き」から再編集。サーバー送信なし |
+| Project JSON | バージョン付き共通スキーマで素材・タイムライン・レシピ・Motion・BGM・レンダー設定を保存。素材埋め込みJSONの入出力に対応 |
 | GIF書き出し | 自前のGIF89aエンコーダ（メディアンカット+ディザ+LZW） |
 | ギャラリー | 作品（元画像+レシピ）をR2+D1に保存。**画像は既定で非公開**（期限付き署名URLでのみ閲覧可） |
 | 共有リンク | 作品ごとに `/w/<id>` を発行。OGPに**加工後の画像そのもの**が出る（長辺1200pxのJPEG）。**約1日で自動失効** |
@@ -185,6 +186,7 @@ AI_MODEL_EMBED=bge-m3
 ```
 public/          静的アセット（これだけでTier 1として動く）
   app.js         WebGL2パイプライン・UI・ピクセルソート・GIFエンコーダ・グラフ
+  project-format.js 共通Project JSONの生成・検証・読み込み
   i18n.js        日本語・英語の文言
   analytics.js   利用イベントの送信（送信先が無ければ何もしない）
   about.html     サイトの説明ページ（英語版は about-en.html）
@@ -192,6 +194,7 @@ src/
   worker.js      APIルーティング・ギャラリー・共有・レート制限
   ai.js          AIプロバイダの抽象化（workers-ai / openai / none）
 schema.sql       D1スキーマ
+schemas/         Web / Desktop / Mobile / MCPで共有するJSON Schema
 wrangler.jsonc   Workers設定（fork時は name / database_id / bucket_name を変更）
 ```
 
@@ -309,7 +312,8 @@ MIT License（[LICENSE](LICENSE)）。
 - [ ] スタイルバイブルと参照素材によるカット間の一貫性維持
 - [ ] Motion Grammarを使った意図ベースの演出選択と組み合わせ
 - [ ] 字幕生成、分割、カット別トランジション、フック／テンポの自動レビュー
-- [ ] 共通プロジェクト形式とクラウド同期（Web / Desktop / Mobile）
+- [x] 共通Project JSONと素材埋め込み入出力
+- [ ] クラウド同期（Web / Desktop / Mobile）
 - [ ] MCPサーバーから企画・生成・編集・プレビュー・書き出しを操作
 - [ ] TikTok Content Posting APIを使った下書き／直接投稿
 - [ ] エフェクトの並び替え（現在は適用順が固定。COLOR GRADEのみ前後を切替可）

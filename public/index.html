@@ -13,21 +13,27 @@
 <meta property="og:image" content="/og.png" />
 <meta name="twitter:card" content="summary_large_image" />
 <meta name="theme-color" content="#0b0d0c" />
-<link rel="manifest" href="/manifest.json" />
+<link rel="manifest" href="./manifest.json" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=DotGothic16&family=IBM+Plex+Mono:wght@400;600&family=Zen+Kaku+Gothic+New:wght@400;500&display=swap" rel="stylesheet" />
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' fill='%230b0d0c'/><rect x='2' y='2' width='5' height='5' fill='%23c8ff00'/><rect x='9' y='9' width='5' height='5' fill='%23ff3ea5'/></svg>" />
-<link rel="stylesheet" href="/style.css" />
+<link rel="stylesheet" href="./style.css" />
 </head>
 <body>
 <div class="crt-overlay" aria-hidden="true"></div>
+
+<div class="file-mode-warning" id="file-mode-warning" hidden role="status">
+  <strong>ローカルサーバー経由で開いてください</strong>
+  <span>見た目は表示できますが、WebGL編集・動画書き出し・AI生成は <code>file://</code> 直開きでは動作しません。</span>
+  <code>python3 -m http.server 8000 -d public</code>
+</div>
 
 <header class="topbar">
   <h1 class="logo" data-text="NOIZ LAB">NOIZ LAB</h1>
   <span class="logo-sub">画像エフェクト実験室</span>
   <nav class="topbar-links">
-    <a id="nav-about" href="/about">About</a>
+    <a id="nav-about" href="./about.html">About</a>
     <a href="https://github.com/Pregum/image_effector" target="_blank" rel="noopener">GitHub</a>
   </nav>
   <div class="topbar-actions">
@@ -172,6 +178,10 @@
         <button id="project-save" class="btn">▣ プロジェクト保存</button>
         <button id="project-load" class="btn">↻ 前回の続き</button>
       </div>
+      <div class="ai-row project-row">
+        <button id="project-export" class="btn">↓ JSON書き出し</button>
+        <button id="project-import" class="btn">↑ JSONを開く</button>
+      </div>
       <p class="text-hint" id="project-note">このブラウザに素材と編集内容を保存できます。</p>
       <div class="ai-row bpm-row">
         <input id="bpm-input" type="number" min="40" max="220" value="120" title="BPM" />
@@ -226,6 +236,12 @@
 <input type="file" id="overlay-input" accept="image/*" hidden />
 <input type="file" id="transb-input" accept="image/*,video/*" multiple hidden />
 <input type="file" id="bgm-input" accept="audio/*" hidden />
-<script type="module" src="/app.js"></script>
+<input type="file" id="project-input" accept="application/json,.json,.noiz.json" hidden />
+<script>
+  if (location.protocol === "file:") {
+    document.getElementById("file-mode-warning").hidden = false;
+  }
+</script>
+<script type="module" src="./app.js"></script>
 </body>
 </html>

@@ -1,5 +1,8 @@
 import { t, LANG, setLang, localizeDom } from "./i18n.js";
 import { track, setAnalyticsEnabled } from "./analytics.js";
+import {
+  createAssetId, createClipId, createProject, parseProjectJson, stringifyProject, validateProject,
+} from "./project-format.js";
 
 /* NOIZ LAB — 画像エフェクト実験室
  * すべての画像処理はブラウザ内 WebGL2 + Canvas で完結する。
@@ -1336,13 +1339,13 @@ async function ensureEditorBase(source) {
   await loadBlob(await canvasBlob(c, "image/png"));
 }
 
-async function addSlideBitmap(bmp, recipe = null, sourceBlob = null) {
+async function addSlideBitmap(bmp, recipe = null, sourceBlob = null, assetId = createAssetId()) {
   if (slides.length >= MAX_SLIDES) {
     transNote.textContent = `カットは最大${MAX_SLIDES}枚までです。`;
     return;
   }
   await ensureEditorBase(bmp);
-  const s = { kind: "image", bmp, sourceBlob: sourceBlob || await bitmapBlob(bmp), tex: makeTex(), thumb: null, recipe, override: null, textTex: null };
+  const s = { kind: "image", assetId, bmp, sourceBlob: sourceBlob || await bitmapBlob(bmp), tex: makeTex(), thumb: null, recipe, override: null, textTex: null };
   uploadSlide(s);
   buildSlideOverride(s);
   const tc = document.createElement("canvas");
@@ -1395,7 +1398,7 @@ async function addSlideVideo(blob, saved = {}) {
   const sc = Math.max(96 / video.videoWidth, 64 / video.videoHeight);
   tc.getContext("2d").drawImage(video, (96 - video.videoWidth * sc) / 2, (64 - video.videoHeight * sc) / 2, video.videoWidth * sc, video.videoHeight * sc);
   const s = {
-    kind: "video", video, objectUrl, sourceBlob: blob, name: saved.name || blob.name || "video",
+    kind: "video", assetId: saved.assetId || createAssetId(), video, objectUrl, sourceBlob: blob, name: saved.name || blob.name || "video",
     duration, trimStart, trimEnd, tex: makeTex(), thumb: tc.toDataURL(), recipe: saved.recipe || null,
     override: null, textTex: null, mediaCanvas: null,
   };
@@ -1456,6 +1459,115 @@ clipTrimEnd.addEventListener("change", applyTrimInputs);
 // ---- ローカルプロジェクト（素材Blob + 編集内容をIndexedDBへ保存）
 const projectNote = document.getElementById("project-note");
 const PROJECT_DB = "noiz-lab-projects";
+const TRANSITION_TECHNIQUES = ["fade", "wipe", "dissolve", "glitch", "punch", "flash", "push", "film-burn"];
+let activeProject = createProject();
+
+function projectRatioName() {
+  if (Math.abs(exportRatio - 16 / 9) < 0.01) return "16:9";
+  if (Math.abs(exportRatio - 1) < 0.01) return "1:1";
+  if (Math.abs(exportRatio - 9 / 16) < 0.01) return "9:16";
+  return "original";
+}
+
+function projectRenderSize() {
+  const ratio = exportRatio || (W && H ? W / H : 16 / 9);
+  return ratio >= 1
+    ? { width: 1280, height: Math.max(2, Math.round((1280 / ratio) / 2) * 2) }
+    : { width: Math.max(2, Math.round((1280 * ratio) / 2) * 2), height: 1280 };
+}
+
+function buildProjectManifest(sourceKind = "indexeddb") {
+  const updatedAt = new Date().toISOString();
+  const renderSize = projectRenderSize();
+  const assets = slides.map((s) => ({
+    id: s.assetId ||= createAssetId(),
+    type: s.kind,
+    name: s.name || `${s.kind}-${s.assetId}`,
+    mime: s.sourceBlob?.type || (s.kind === "video" ? "video/mp4" : "image/webp"),
+    source: { kind: sourceKind, ref: s.assetId },
+    metadata: s.kind === "video"
+      ? { width: s.video.videoWidth || 0, height: s.video.videoHeight || 0, duration: s.duration || 0 }
+      : { width: s.bmp.width || 0, height: s.bmp.height || 0, duration: 0 },
+    generation: null,
+  }));
+  if (bgmBlob) {
+    bgmAssetId ||= createAssetId();
+    assets.push({
+      id: bgmAssetId, type: "audio", name: bgmFileName || "bgm", mime: bgmBlob.type || "audio/mpeg",
+      source: { kind: sourceKind, ref: bgmAssetId },
+      metadata: { width: 0, height: 0, duration: bgmBuffer?.duration || 0 }, generation: null,
+    });
+  }
+  let cursor = 0;
+  const visualClips = slides.map((s, i) => {
+    const duration = slideDurationMs(s) / 1000;
+    const transition = i < slides.length - 1 ? {
+      technique: TRANSITION_TECHNIQUES[seqState.mode] || "fade",
+      duration: seqState.trans,
+      params: {},
+    } : null;
+    const clip = {
+      id: s.clipId ||= createClipId(), assetId: s.assetId, purpose: "unspecified",
+      start: cursor, duration,
+      trim: { in: s.kind === "video" ? s.trimStart : 0, out: s.kind === "video" ? s.trimEnd : duration },
+      recipe: s.recipe || null,
+      motion: seqState.zoom ? [{ technique: "ken-burns", role: "primary", params: { direction: i % 2 ? "out" : "in", amount: 0.08 } }] : [],
+      transitionOut: transition,
+    };
+    cursor += duration + (transition?.duration || 0);
+    return clip;
+  });
+  const tracks = [{ id: "visual-main", type: "visual", clips: visualClips }];
+  if (bgmBlob) {
+    tracks.push({ id: "audio-bgm", type: "audio", clips: [{
+      id: "bgm-main", assetId: bgmAssetId, purpose: "unspecified", start: 0,
+      duration: Math.min(seqTotalSec(), bgmBuffer?.duration || seqTotalSec()),
+      trim: { in: 0, out: Math.min(seqTotalSec(), bgmBuffer?.duration || seqTotalSec()) },
+      recipe: null, motion: [], transitionOut: null,
+    }] });
+  }
+  return createProject({
+    ...activeProject,
+    updatedAt,
+    brief: { ...activeProject.brief, duration: seqTotalSec() },
+    styleBible: { ...activeProject.styleBible, seed },
+    canvas: { width: W || 1200, height: H || 800, ratio: projectRatioName(), fps: 30 },
+    editor: { recipe: currentRecipe(), perCutEffects: seqState.percut },
+    assets,
+    timeline: {
+      bpm: Math.min(400, Math.max(0, Number(document.getElementById("bpm-input").value) || 0)),
+      beatDivision: bpmBeats,
+      tracks,
+    },
+    captions: activeProject.captions || [],
+    render: { ...renderSize, fps: 30, codec: "h264", container: "mp4" },
+  });
+}
+
+function projectBlobs() {
+  const entries = slides.filter((s) => s.sourceBlob).map((s) => [s.assetId, s.sourceBlob]);
+  if (bgmBlob && bgmAssetId) entries.push([bgmAssetId, bgmBlob]);
+  return Object.fromEntries(entries);
+}
+
+function blobToBase64(blob) {
+  return blob.arrayBuffer().then((buffer) => {
+    const bytes = new Uint8Array(buffer);
+    let binary = "";
+    for (let i = 0; i < bytes.length; i += 0x8000) {
+      binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+    }
+    return btoa(binary);
+  });
+}
+
+function base64ToBlob(data, mime) {
+  const binary = atob(data);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return new Blob([bytes], { type: mime || "application/octet-stream" });
+}
+
 function openProjectDb() {
   return new Promise((resolve, reject) => {
     const req = indexedDB.open(PROJECT_DB, 1);
@@ -1478,16 +1590,11 @@ async function saveProject() {
     projectNote.textContent = "先に画像か動画を追加してください。";
     return;
   }
-  const record = {
-    id: "latest", version: 1, updatedAt: Date.now(),
-    seqState: { ...seqState }, editorRecipe: currentRecipe(),
-    slides: slides.map((s) => ({
-      kind: s.kind, blob: s.sourceBlob, recipe: s.recipe, name: s.name || null,
-      trimStart: s.trimStart ?? null, trimEnd: s.trimEnd ?? null,
-    })),
-  };
+  const manifest = buildProjectManifest();
+  const record = { id: "latest", version: 2, updatedAt: Date.now(), manifest, blobs: projectBlobs() };
   try {
     await projectStore("readwrite", (store) => store.put(record));
+    activeProject = manifest;
     projectNote.textContent = `保存しました · ${new Date(record.updatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
   } catch {
     projectNote.textContent = "保存できませんでした。ブラウザの保存領域を確認してください。";
@@ -1506,10 +1613,16 @@ function clearSequence() {
 async function loadProject() {
   try {
     const record = await projectStore("readonly", (store) => store.get("latest"));
-    if (!record?.slides?.length) {
+    if (!record?.manifest && !record?.slides?.length) {
       projectNote.textContent = "保存されたプロジェクトはありません。";
       return;
     }
+    if (record.manifest) {
+      await restoreProject(record.manifest, record.blobs || {});
+      projectNote.textContent = `続きを開きました · ${new Date(record.updatedAt).toLocaleString()}`;
+      return;
+    }
+    // version 1の保存データを読み込み、次回保存時に共通Project形式へ移行する。
     clearSequence();
     originalData = null;
     baseData = null;
@@ -1538,8 +1651,123 @@ async function loadProject() {
     projectNote.textContent = "プロジェクトを開けませんでした。";
   }
 }
+
+async function restoreProject(manifest, storedBlobs = {}) {
+  const check = validateProject(manifest);
+  if (!check.valid) throw new Error(check.errors.join(" / "));
+  const blobs = { ...storedBlobs };
+  for (const asset of manifest.assets) {
+    if (asset.source.kind === "embedded") blobs[asset.id] = base64ToBlob(asset.source.data, asset.mime);
+  }
+  const visual = manifest.timeline.tracks.find((track) => track.type === "visual");
+  if (!visual?.clips?.length) throw new Error("visual track is empty");
+  for (const clip of visual.clips) {
+    if (!blobs[clip.assetId]) throw new Error(`素材がありません: ${clip.assetId}`);
+  }
+  clearSequence();
+  originalData = null;
+  baseData = null;
+  bgmBuffer = null; bgmBlob = null; bgmFileName = ""; bgmAssetId = null;
+  activeProject = manifest;
+  if (manifest.editor?.recipe) applyRecipeObject({
+    e: manifest.editor.recipe.enabled, s: manifest.editor.recipe.state,
+    seed: manifest.editor.recipe.seed, t: manifest.editor.recipe.text,
+  });
+  const firstTransition = visual.clips.find((clip) => clip.transitionOut)?.transitionOut;
+  seqState.mode = Math.max(0, TRANSITION_TECHNIQUES.indexOf(firstTransition?.technique || "fade"));
+  seqState.trans = firstTransition?.duration ?? 0.6;
+  seqState.zoom = visual.clips.some((clip) => clip.motion?.some((m) => m.technique === "ken-burns"));
+  seqState.percut = manifest.editor?.perCutEffects ?? visual.clips.some((clip) => !!clip.recipe);
+  const firstImage = visual.clips.find((clip) => manifest.assets.find((a) => a.id === clip.assetId)?.type === "image");
+  if (firstImage) seqState.hold = firstImage.duration;
+  document.getElementById("bpm-input").value = manifest.timeline.bpm || 120;
+  bpmBeats = manifest.timeline.beatDivision || 2;
+  for (const clip of visual.clips) {
+    const asset = manifest.assets.find((a) => a.id === clip.assetId);
+    const blob = blobs[clip.assetId];
+    if (asset.type === "video") {
+      await addSlideVideo(blob, { assetId: asset.id, name: asset.name, recipe: clip.recipe, trimStart: clip.trim.in, trimEnd: clip.trim.out });
+      slides.at(-1).clipId = clip.id;
+    } else {
+      await addSlideBitmap(await createImageBitmap(blob), clip.recipe, blob, asset.id);
+      slides.at(-1).clipId = clip.id;
+    }
+  }
+  const audioTrack = manifest.timeline.tracks.find((track) => track.type === "audio");
+  const audioClip = audioTrack?.clips?.[0];
+  if (audioClip && blobs[audioClip.assetId]) {
+    const audioAsset = manifest.assets.find((a) => a.id === audioClip.assetId);
+    bgmAssetId = audioClip.assetId;
+    await loadBgmBlob(blobs[audioClip.assetId], audioAsset?.name || "bgm");
+  }
+  document.getElementById("slide-hold").value = seqState.hold;
+  document.getElementById("slide-hold-val").textContent = `${seqState.hold.toFixed(2)}s`;
+  document.getElementById("trans-duration").value = seqState.trans;
+  document.getElementById("trans-duration-val").textContent = `${seqState.trans.toFixed(1)}s`;
+  document.getElementById("chk-zoom").checked = seqState.zoom;
+  document.getElementById("chk-percut").checked = seqState.percut;
+  document.getElementById("trans-mode-seg").querySelectorAll("button").forEach((b) =>
+    b.classList.toggle("sel", Number(b.dataset.mode) === seqState.mode));
+  const ratioValue = { original: "0", "16:9": "1.77778", "1:1": "1", "9:16": "0.5625" }[manifest.canvas.ratio] || "0";
+  ratioSeg.querySelector(`button[data-r="${ratioValue}"]`)?.click();
+  selectedSlide = -1;
+  clipTrim.hidden = true;
+  renderSlideStrip();
+}
+
+async function exportProjectJson() {
+  if (!slides.length) { projectNote.textContent = "先に画像か動画を追加してください。"; return; }
+  const manifest = buildProjectManifest("embedded");
+  const blobs = projectBlobs();
+  const totalBytes = Object.values(blobs).reduce((sum, blob) => sum + (blob?.size || 0), 0);
+  if (totalBytes > 150 * 1024 * 1024) {
+    projectNote.textContent = "素材が150MBを超えるためJSONへ埋め込めません。クラウド参照形式の実装後に対応します。";
+    return;
+  }
+  projectNote.textContent = "素材を含むProject JSONを作成中…";
+  try {
+    for (const asset of manifest.assets) {
+      const blob = blobs[asset.id];
+      if (!blob) throw new Error(`missing blob: ${asset.id}`);
+      asset.source = { kind: "embedded", data: await blobToBase64(blob) };
+    }
+    const blob = new Blob([stringifyProject(manifest)], { type: "application/json" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `noizlab-project-${Date.now()}.noiz.json`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    projectNote.textContent = `Project JSONを書き出しました（${(blob.size / 1024 / 1024).toFixed(1)}MB）。`;
+  } catch {
+    projectNote.textContent = "Project JSONを書き出せませんでした。";
+  }
+}
+
+const projectInput = document.getElementById("project-input");
+async function importProjectJson(file) {
+  if (file.size > 210 * 1024 * 1024) {
+    projectNote.textContent = "Project JSONが大きすぎます（上限210MB）。";
+    return;
+  }
+  projectNote.textContent = "Project JSONを読み込み中…";
+  try {
+    const manifest = parseProjectJson(await file.text());
+    await restoreProject(manifest);
+    await projectStore("readwrite", (store) => store.put({ id: "latest", version: 2, updatedAt: Date.now(), manifest: buildProjectManifest(), blobs: projectBlobs() }));
+    projectNote.textContent = `Project JSONを開きました · ${manifest.title}`;
+  } catch (error) {
+    projectNote.textContent = String(error?.message || "Project JSONを開けませんでした。");
+  }
+}
+
 document.getElementById("project-save").addEventListener("click", saveProject);
 document.getElementById("project-load").addEventListener("click", loadProject);
+document.getElementById("project-export").addEventListener("click", exportProjectJson);
+document.getElementById("project-import").addEventListener("click", () => projectInput.click());
+projectInput.addEventListener("change", async () => {
+  const file = projectInput.files[0]; projectInput.value = "";
+  if (file) await importProjectJson(file);
+});
 
 document.getElementById("trans-mode-seg").querySelectorAll("button").forEach((b) => {
   b.addEventListener("click", () => {
@@ -1663,29 +1891,41 @@ function detectBPM(buffer) {
 
 // ---- BGM（録画時に音声トラックとして合成）
 let bgmBuffer = null;
+let bgmBlob = null;
+let bgmFileName = "";
+let bgmAssetId = null;
 const bgmInput = document.getElementById("bgm-input");
 const bgmNameEl = document.getElementById("bgm-name");
 document.getElementById("bgm-open").addEventListener("click", () => bgmInput.click());
-bgmInput.addEventListener("change", async () => {
-  const f = bgmInput.files[0];
-  bgmInput.value = "";
-  if (!f) return;
+async function loadBgmBlob(blob, name = "bgm") {
   try {
     const ac = new (window.AudioContext || window.webkitAudioContext)();
-    bgmBuffer = await ac.decodeAudioData(await f.arrayBuffer());
+    bgmBuffer = await ac.decodeAudioData(await blob.arrayBuffer());
     ac.close();
+    bgmBlob = blob;
+    bgmFileName = name;
+    bgmAssetId ||= createAssetId();
     const bpm = detectBPM(bgmBuffer);
     bgmNameEl.hidden = false;
     bgmNameEl.textContent =
-      `♫ ${f.name}（${bgmBuffer.duration.toFixed(1)}s${bpm ? ` / 推定${bpm}BPM` : ""}）`;
+      `♫ ${name}（${bgmBuffer.duration.toFixed(1)}s${bpm ? ` / 推定${bpm}BPM` : ""}）`;
     if (bpm) document.getElementById("bpm-input").value = bpm;
     document.getElementById("bgm-clear").disabled = false;
   } catch {
     transNote.textContent = t("BGMを読み込めませんでした（mp3/wav/m4a等）。");
   }
+}
+bgmInput.addEventListener("change", async () => {
+  const f = bgmInput.files[0];
+  bgmInput.value = "";
+  if (!f) return;
+  await loadBgmBlob(f, f.name);
 });
 document.getElementById("bgm-clear").addEventListener("click", () => {
   bgmBuffer = null;
+  bgmBlob = null;
+  bgmFileName = "";
+  bgmAssetId = null;
   bgmNameEl.hidden = true;
   bgmNameEl.textContent = "";
   document.getElementById("bgm-clear").disabled = true;

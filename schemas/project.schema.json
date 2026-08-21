@@ -1,0 +1,165 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://noiz-lab.dev/schemas/project.schema.json",
+  "title": "NOIZ LAB Project",
+  "type": "object",
+  "required": ["format", "version", "id", "title", "createdAt", "updatedAt", "brief", "styleBible", "canvas", "editor", "assets", "timeline", "captions", "render"],
+  "properties": {
+    "format": { "const": "noizlab-project" },
+    "version": { "const": 1 },
+    "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "title": { "type": "string", "maxLength": 160 },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "updatedAt": { "type": "string", "format": "date-time" },
+    "brief": {
+      "type": "object",
+      "required": ["objective", "audience", "platform", "duration", "mood", "language"],
+      "properties": {
+        "objective": { "type": "string", "maxLength": 1000 },
+        "audience": { "type": "string", "maxLength": 500 },
+        "platform": { "enum": ["generic", "tiktok", "instagram-reels", "youtube-shorts", "presentation"] },
+        "duration": { "type": "number", "minimum": 0, "maximum": 3600 },
+        "mood": { "type": "array", "maxItems": 16, "items": { "type": "string", "maxLength": 80 } },
+        "language": { "type": "string", "minLength": 2, "maxLength": 16 }
+      },
+      "additionalProperties": false
+    },
+    "styleBible": {
+      "type": "object",
+      "required": ["subjects", "palette", "lighting", "camera", "texture", "typography", "references", "negativePrompt", "seed"],
+      "properties": {
+        "subjects": { "type": "array", "items": { "type": "object" } },
+        "palette": { "type": "array", "maxItems": 12, "items": { "type": "string", "pattern": "^#[0-9a-fA-F]{6}$" } },
+        "lighting": { "type": "string", "maxLength": 300 },
+        "camera": { "type": "string", "maxLength": 300 },
+        "texture": { "type": "array", "items": { "type": "string", "maxLength": 80 } },
+        "typography": { "type": "object" },
+        "references": { "type": "array", "items": { "type": "string", "maxLength": 128 } },
+        "negativePrompt": { "type": "string", "maxLength": 1000 },
+        "seed": { "type": "number" }
+      },
+      "additionalProperties": false
+    },
+    "canvas": {
+      "type": "object",
+      "required": ["width", "height", "ratio", "fps"],
+      "properties": {
+        "width": { "type": "integer", "minimum": 1, "maximum": 8192 },
+        "height": { "type": "integer", "minimum": 1, "maximum": 8192 },
+        "ratio": { "enum": ["original", "16:9", "1:1", "9:16"] },
+        "fps": { "type": "number", "minimum": 1, "maximum": 120 }
+      },
+      "additionalProperties": false
+    },
+    "editor": {
+      "type": "object",
+      "required": ["recipe", "perCutEffects"],
+      "properties": {
+        "recipe": { "type": ["object", "null"] },
+        "perCutEffects": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "assets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "type", "name", "mime", "source", "metadata"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "type": { "enum": ["image", "video", "audio", "generated-image", "generated-scene"] },
+          "name": { "type": "string", "maxLength": 300 },
+          "mime": { "type": "string", "maxLength": 120 },
+          "source": {
+            "type": "object",
+            "required": ["kind"],
+            "properties": {
+              "kind": { "enum": ["indexeddb", "embedded", "r2", "url", "local"] },
+              "ref": { "type": "string", "maxLength": 2048 },
+              "data": { "type": "string", "maxLength": 280000000 }
+            },
+            "additionalProperties": false
+          },
+          "metadata": {
+            "type": "object",
+            "properties": {
+              "width": { "type": "integer", "minimum": 0 },
+              "height": { "type": "integer", "minimum": 0 },
+              "duration": { "type": "number", "minimum": 0 }
+            },
+            "additionalProperties": false
+          },
+          "generation": { "type": ["object", "null"] }
+        },
+        "additionalProperties": false
+      }
+    },
+    "timeline": {
+      "type": "object",
+      "required": ["bpm", "beatDivision", "tracks"],
+      "properties": {
+        "bpm": { "type": "number", "minimum": 0, "maximum": 400 },
+        "beatDivision": { "type": "integer", "enum": [1, 2, 4, 8, 16] },
+        "tracks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "type", "clips"],
+            "properties": {
+              "id": { "type": "string", "minLength": 1 },
+              "type": { "enum": ["visual", "audio", "caption"] },
+              "clips": { "type": "array", "items": { "$ref": "#/$defs/clip" } }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "captions": { "type": "array", "items": { "type": "object" } },
+    "render": {
+      "type": "object",
+      "required": ["width", "height", "fps", "codec", "container"],
+      "properties": {
+        "width": { "type": "integer", "minimum": 2, "maximum": 8192 },
+        "height": { "type": "integer", "minimum": 2, "maximum": 8192 },
+        "fps": { "type": "number", "minimum": 1, "maximum": 120 },
+        "codec": { "enum": ["h264", "vp9", "av1"] },
+        "container": { "enum": ["mp4", "webm"] }
+      },
+      "additionalProperties": false
+    }
+  },
+  "$defs": {
+    "clip": {
+      "type": "object",
+      "required": ["id", "assetId", "start", "duration", "trim", "recipe", "motion", "transitionOut"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "assetId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "purpose": { "enum": ["hook", "explain", "demonstrate", "reveal", "emotion", "cta", "unspecified"] },
+        "start": { "type": "number", "minimum": 0 },
+        "duration": { "type": "number", "exclusiveMinimum": 0 },
+        "trim": {
+          "type": "object",
+          "required": ["in", "out"],
+          "properties": { "in": { "type": "number", "minimum": 0 }, "out": { "type": "number", "minimum": 0 } },
+          "additionalProperties": false
+        },
+        "recipe": { "type": ["object", "null"] },
+        "motion": { "type": "array", "items": { "type": "object" } },
+        "transitionOut": {
+          "type": ["object", "null"],
+          "properties": {
+            "technique": { "type": "string", "maxLength": 80 },
+            "duration": { "type": "number", "minimum": 0, "maximum": 10 },
+            "params": { "type": "object" }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

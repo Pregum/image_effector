@@ -5,8 +5,9 @@
   "assets": {
     "directory": "public",
     "binding": "ASSETS",
-    // OGPの絶対URLを配信時に埋めるため、HTMLのページだけWorkerを先に通す
-    "run_worker_first": ["/", "/about", "/about-en"]
+    // OGPの絶対URLを配信時に埋めるため、HTMLのページだけWorkerを先に通す。
+    // LT資料は配下に数MBの動画があるので、HTMLのパスだけを指定する（/* にはしない）
+    "run_worker_first": ["/", "/about", "/about-en", "/pizza-ai-tooling-lt/"]
   },
   "ai": {
     "binding": "AI"

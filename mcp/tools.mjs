@@ -275,37 +275,56 @@ export function buildShortVideo(args = {}) {
     if (!PURPOSES.includes(p)) fail(`purposes[${i}] must be one of: ${PURPOSES.join(", ")}`);
   }
 
+  // A storyboard carries per-cut durations, purposes, motion and transitions.
+  // When one is supplied it drives the timeline, so the deliberate pacing the
+  // director wrote survives instead of being flattened to a uniform hold.
+  const storyboard = args.storyboard == null
+    ? null
+    : normalizeStoryboard(args.storyboard, { duration: target, language: project.brief.language });
+  if (storyboard && storyboard.cuts.length !== visuals.length) {
+    fail(`storyboard has ${storyboard.cuts.length} cuts but ${visuals.length} assets were supplied`);
+  }
+
   const track = visualTrack(project);
   track.clips = [];
   let cursor = 0;
   for (const [i, asset] of visuals.entries()) {
     const last = i === visuals.length - 1;
-    const purpose = purposes[i] || (i === 0 ? "hook" : last ? "cta" : "explain");
+    const board = storyboard?.cuts[i];
+    const purpose = purposes[i] || board?.purpose || (i === 0 ? "hook" : last ? "cta" : "explain");
+    const cutDuration = board ? board.duration : hold;
     // Motion alternates so consecutive cuts don't read as the same move; the
     // grammar IDs come from docs/motion-grammar.md.
+    const motionId = board?.motion ?? (i % 2 === 0 ? "orthographic-pullback" : "constant-linear");
     const motion = [{
-      id: i % 2 === 0 ? "orthographic-pullback" : "constant-linear",
+      id: motionId,
       role: "primary",
-      params: i % 2 === 0
+      params: motionId === "orthographic-pullback"
         ? { fromScale: 1.08, toScale: 1, parallax: 0.2 }
-        : { velocity: 0.02, axis: i % 4 === 1 ? "x" : "y", loop: false },
+        : motionId === "constant-linear"
+        ? { velocity: 0.02, axis: i % 4 === 1 ? "x" : "y", loop: false }
+        : {},
     }];
+    const technique = board ? board.transitionOut : wheel[i % wheel.length];
+    const cutRecipe = board?.preset
+      ? { ...(isObj(project.editor.recipe) ? project.editor.recipe : {}), preset: board.preset }
+      : isObj(project.editor.recipe) ? { ...project.editor.recipe } : null;
     track.clips.push({
       id: createClipId(),
       assetId: asset.id,
       purpose,
       start: round(cursor),
-      duration: hold,
-      trim: { in: 0, out: hold },
-      recipe: isObj(project.editor.recipe) ? { ...project.editor.recipe } : null,
+      duration: cutDuration,
+      trim: { in: 0, out: cutDuration },
+      recipe: cutRecipe,
       motion,
-      transitionOut: last ? null : {
-        technique: wheel[i % wheel.length],
+      transitionOut: last || !technique ? null : {
+        technique,
         duration: transitionDuration,
         params: {},
       },
     });
-    cursor += hold;
+    cursor += cutDuration;
   }
 
   project.timeline.bpm = bpm;
@@ -321,7 +340,7 @@ export function buildShortVideo(args = {}) {
     // rather than adding time, which is how the CLI concatenates them.
     summary: {
       cuts: track.clips.length,
-      hold,
+      hold: storyboard ? null : hold,
       totalDuration: round(cursor),
       transitions: track.clips.slice(0, -1).map((c) => c.transitionOut.technique),
       bpm,
@@ -330,10 +349,189 @@ export function buildShortVideo(args = {}) {
       requestedDuration: target,
       // Present only when the clamp changed the outcome, so a caller can add
       // cuts or accept the shorter runtime.
-      ...(holdClamped ? {
+      ...(storyboard ? { storyboardDriven: true } : {}),
+      ...(holdClamped && !storyboard ? {
         note: `1カット${round(rawHold)}秒は範囲外のため${hold}秒に丸めました。全体は${round(cursor)}秒です。想定の${target}秒に近づけるにはカット数を増やしてください。`,
       } : {}),
     },
+  };
+}
+
+const MOTIONS = [
+  "orthographic-pullback", "constant-linear", "frame-echo", "stagger",
+  "modular-grid", "match-cut", "controlled-chaos", "on-twos", "pose-to-pose",
+  "graphic-substitution", "shape-morph", "silhouette-match", "style-transformation",
+  "track-matte", "radial-wipe", "cmyk-misregistration", "halftone", "paper-collage",
+];
+
+// An LLM writes the storyboard; this normalises it into something the rest of
+// the pipeline can rely on. Anything out of range is clamped or dropped rather
+// than rejected, so one bad field does not throw away a usable storyboard.
+function normalizeStoryboard(raw, { duration, language }) {
+  if (!isObj(raw)) fail("storyboard must be an object");
+  const cuts = Array.isArray(raw.cuts) ? raw.cuts.slice(0, 8) : [];
+  if (!cuts.length) fail("storyboard.cuts must contain at least one cut");
+
+  const normalized = cuts.map((cut, i) => {
+    const last = i === cuts.length - 1;
+    const purpose = PURPOSES.includes(cut?.purpose) ? cut.purpose
+      : i === 0 ? "hook" : last ? "cta" : "explain";
+    const preset = PRESETS.includes(String(cut?.preset).toUpperCase())
+      ? String(cut.preset).toUpperCase() : null;
+    const motion = MOTIONS.includes(cut?.motion) ? cut.motion : "orthographic-pullback";
+    // The final cut must not transition into nothing; every other cut must.
+    const technique = TRANSITIONS.includes(cut?.transitionOut) ? cut.transitionOut : "fade";
+    return {
+      purpose,
+      duration: clamp(Number(cut?.duration) > 0 ? Number(cut.duration) : 2, 0.5, 6),
+      shot: typeof cut?.shot === "string" ? cut.shot.slice(0, 200) : "",
+      caption: typeof cut?.caption === "string" ? cut.caption.slice(0, 60) : "",
+      imagePrompt: typeof cut?.imagePrompt === "string" ? cut.imagePrompt.slice(0, 400) : "",
+      preset,
+      motion,
+      transitionOut: last ? null : technique,
+    };
+  });
+
+  // Rescale to the requested duration so the storyboard and the brief agree;
+  // the model is asked for this but does not always land it.
+  const target = duration > 0 ? duration : 0;
+  const total = normalized.reduce((sum, c) => sum + c.duration, 0);
+  if (target > 0 && total > 0 && Math.abs(total - target) > target * 0.02) {
+    // The hook is the one cut whose length is deliberate: it has to land within
+    // roughly two seconds or the viewer leaves. Stretching it to fill a longer
+    // target defeats the storyboard, so hold a short hook and rescale the rest.
+    const hook = normalized[0].purpose === "hook" && normalized[0].duration <= 2.5 && normalized.length > 1
+      ? normalized[0] : null;
+    const scalable = hook ? normalized.slice(1) : normalized;
+    const scalableTotal = scalable.reduce((sum, c) => sum + c.duration, 0);
+    const scale = (target - (hook?.duration ?? 0)) / scalableTotal;
+    for (const cut of scalable) cut.duration = clamp(round(cut.duration * scale), 0.5, 6);
+    // Scaling runs into the per-cut limits, so the total can still miss. Settle
+    // the remainder one cut at a time: give each cut with headroom as much of
+    // what is left as it can take. This terminates and lands exactly, where
+    // spreading it evenly leaves rounding dust that never converges. A target
+    // that cannot be reached at all (outside cuts*0.5 .. cuts*6) stays short or
+    // long; the caller sees it in totalDuration and can change the cut count.
+    for (let pass = 0; pass < 3; pass++) {
+      let remainder = round(target - normalized.reduce((acc, c) => acc + c.duration, 0));
+      if (remainder === 0) break;
+      // Protecting the hook is preferred, not absolute: if every other cut is at
+      // its limit, releasing the hook is better than silently missing the target.
+      const others = normalized.filter((c) => c !== hook);
+      const stuck = others.every((c) => remainder > 0 ? c.duration >= 6 : c.duration <= 0.5);
+      for (const cut of normalized) {
+        if (remainder === 0) break;
+        if (cut === hook && !stuck) continue;
+        const headroom = remainder > 0 ? round(6 - cut.duration) : round(0.5 - cut.duration);
+        if (headroom === 0) continue;
+        const give = remainder > 0 ? Math.min(remainder, headroom) : Math.max(remainder, headroom);
+        cut.duration = round(cut.duration + give);
+        remainder = round(remainder - give);
+      }
+    }
+  }
+
+  return {
+    title: typeof raw.title === "string" && raw.title.trim() ? raw.title.slice(0, 160) : "",
+    logline: typeof raw.logline === "string" ? raw.logline.slice(0, 200) : "",
+    language,
+    cuts: normalized,
+    totalDuration: round(normalized.reduce((sum, c) => sum + c.duration, 0)),
+  };
+}
+
+/**
+ * generate_storyboard
+ *
+ * The caller can supply a storyboard it wrote itself (the MCP client is an LLM,
+ * so this works with no backend at all), or point endpoint at a NOIZ LAB
+ * deployment and let the Worker's /api/storyboard write one.
+ */
+export async function generateStoryboard(args = {}) {
+  const project = args.project == null ? null : requireProject(args.project);
+  // objective only matters when asking a server to write the storyboard; a
+  // caller-supplied one already contains everything needed.
+  const objective = args.objective == null
+    ? (project?.brief.objective ?? "")
+    : requireString(args.objective, "objective", { max: 1000 });
+  const duration = requireNumber(args.duration, "duration", {
+    min: 0, max: 3600, fallback: project?.brief.duration || 15,
+  });
+  const language = requireString(args.language ?? project?.brief.language ?? "ja", "language", { max: 16 });
+
+  let storyboard;
+  let source;
+  if (args.storyboard != null) {
+    storyboard = normalizeStoryboard(args.storyboard, { duration, language });
+    source = "caller";
+  } else {
+    const endpoint = requireString(args.endpoint ?? "", "endpoint", { max: 2048, allowEmpty: true });
+    if (!endpoint) {
+      fail("pass storyboard (write it yourself) or endpoint (a NOIZ LAB deployment whose /api/storyboard writes one)");
+    }
+    if (!objective) fail("objective is required when generating a storyboard from an endpoint");
+    let url;
+    try { url = new URL(endpoint); }
+    catch { fail(`endpoint is not a valid URL: ${endpoint}`); }
+    if (!["http:", "https:"].includes(url.protocol)) fail("endpoint must be http or https");
+    const target = new URL("/api/storyboard", url).href;
+
+    const payload = {
+      objective,
+      duration,
+      language,
+      platform: args.platform ?? project?.brief.platform ?? "generic",
+      audience: args.audience ?? project?.brief.audience ?? "",
+      mood: Array.isArray(args.mood) ? args.mood : project?.brief.mood ?? [],
+    };
+    let res;
+    try {
+      res = await fetch(target, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(requireNumber(args.timeoutMs, "timeoutMs", { min: 1000, max: 120_000, fallback: 60_000 })),
+      });
+    } catch (error) {
+      fail(`could not reach ${target}: ${error.message}`);
+    }
+    const text = await res.text();
+    if (!res.ok) fail(`${target} returned ${res.status}: ${text.slice(0, 200)}`);
+    let body;
+    try { body = JSON.parse(text); }
+    catch { fail(`${target} did not return JSON`); }
+    storyboard = normalizeStoryboard(body?.storyboard ?? body, { duration, language });
+    source = target;
+  }
+
+  // Without a project this is just the storyboard; with one, fold it in so the
+  // captions, style and timing survive into build_short_video.
+  if (!project) return { storyboard, source };
+
+  // create_project_from_brief derives a title from the objective, so a project
+  // is rarely literally "Untitled" and there is no way to tell a derived title
+  // from one the user chose. Default to the storyboard's more considered title
+  // and let the caller opt out.
+  if (storyboard.title && args.keepTitle !== true) project.title = storyboard.title;
+  project.captions = storyboard.cuts
+    .map((cut, i) => ({ cutIndex: i, text: cut.caption, language }))
+    .filter((c) => c.text);
+
+  const presets = storyboard.cuts.map((c) => c.preset).filter(Boolean);
+  if (presets.length) {
+    // One preset for the whole piece unless the storyboard genuinely varies it.
+    const dominant = presets.sort(
+      (a, b) => presets.filter((p) => p === b).length - presets.filter((p) => p === a).length,
+    )[0];
+    project.editor.recipe = { ...(isObj(project.editor.recipe) ? project.editor.recipe : {}), preset: dominant };
+  }
+
+  return {
+    project: touch(project),
+    storyboard,
+    source,
+    nextStep: `Supply ${storyboard.cuts.length} assets and call build_short_video with plan from this storyboard.`,
   };
 }
 
@@ -495,4 +693,4 @@ export async function renderProject(args = {}) {
   };
 }
 
-export const CONSTANTS = { PRESETS, TRANSITIONS, PLATFORMS, PURPOSES, PLATFORM_SHAPE };
+export const CONSTANTS = { PRESETS, TRANSITIONS, PLATFORMS, PURPOSES, MOTIONS, PLATFORM_SHAPE };

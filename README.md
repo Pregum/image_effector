@@ -59,6 +59,7 @@ Claude CodeなどのMCPクライアントから、企画・編集・確認・書
 | MCPツール | 役割 |
 |---|---|
 | `create_project_from_brief` | 目的・対象視聴者・尺・投稿先からプロジェクトと構成案を作成 |
+| `generate_storyboard` | フック・展開・締めを含む絵コンテを生成 |
 | `apply_style_bible` | 色・照明・画角・プリセットを全カットへ統一適用 |
 | `build_short_video` | 素材をタイムラインへ並べ、BPMとトランジションを設定 |
 | `review_hook_and_pacing` | 冒頭・テンポ・尺・字幕・縦横比を検査し、指摘とスコアを返す |
@@ -66,15 +67,21 @@ Claude CodeなどのMCPクライアントから、企画・編集・確認・書
 | `read_project` / `write_project` | Project JSONの読み書き。Web版とそのまま行き来できる |
 | `validate_project` | 共通スキーマに沿っているか検証 |
 
+`generate_storyboard` には2つの経路があります。MCPクライアント自身がLLMなので、
+**絵コンテを自分で書いて `storyboard` に渡せばバックエンドは不要**です。
+デプロイ済みインスタンスの `endpoint` を渡すと、サーバー側のLLM（`/api/storyboard`）が書きます。
+絵コンテは役割・尺・画の指示・字幕・画像生成プロンプト・演出・つなぎを持ち、
+`build_short_video` へ渡すとカットごとの緩急がそのままタイムラインに反映されます。
+
 素材とレンダリング処理はアプリ側（`scripts/noizlab-variety-video.mjs`）が持ち、MCPは操作の入口に徹します。
 各ツールは戻り値の `project` をそのまま次のツールへ渡す形で連結します。
 
 ```text
-create_project_from_brief → apply_style_bible → build_short_video
-  → review_hook_and_pacing → render_project
+create_project_from_brief → generate_storyboard → apply_style_bible
+  → build_short_video → review_hook_and_pacing → render_project
 ```
 
-`generate_storyboard` / `generate_missing_assets`（AI生成）と `export_for_tiktok`（投稿API）は未実装です。
+`generate_missing_assets`（不足素材のAI生成）と `export_for_tiktok`（投稿API）は未実装です。
 現状 `render_project` が扱えるのは `source.kind` が `local` の素材のみで、
 1本あたり最大8カット、1カットの保持時間は0.3〜3秒です。
 
@@ -333,14 +340,15 @@ MIT License（[LICENSE](LICENSE)）。
 - [x] ギャラリー → 類似グラフ → 掛け合わせ → 穴からの提案
 - [x] 画像の非公開化と期限付き共有リンク
 - [x] AIプロバイダの差し替え・バックエンド無し構成
-- [ ] 企画入力 → 絵コンテJSON → 不足素材生成 → 自動タイムライン
+- [ ] 企画入力 → 絵コンテJSON → 不足素材生成 → 自動タイムライン（素材生成以外は完了）
 - [ ] スタイルバイブルと参照素材によるカット間の一貫性維持
 - [ ] Motion Grammarを使った意図ベースの演出選択と組み合わせ
 - [ ] 字幕生成、分割、カット別トランジション、フック／テンポの自動レビュー
 - [x] 共通Project JSONと素材埋め込み入出力
 - [ ] クラウド同期（Web / Desktop / Mobile）
 - [x] MCPサーバーから企画・編集・レビュー・書き出しを操作
-- [ ] MCPからのAI絵コンテ生成・不足素材生成
+- [x] MCPからのAI絵コンテ生成（自前で書く／サーバーのLLMに書かせる）
+- [ ] MCPからの不足素材のAI生成
 - [ ] TikTok Content Posting APIを使った下書き／直接投稿
 - [ ] エフェクトの並び替え（現在は適用順が固定。COLOR GRADEのみ前後を切替可）
 - [ ] AI img2img（無料枠で動くモデルが見つからず保留）

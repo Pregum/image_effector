@@ -725,6 +725,80 @@ async function sceneRoute(req, env, ai) {
   }
 }
 
+// 企画(brief)から絵コンテを起こす。カットの役割・尺・画の指示・演出・つなぎを決める。
+// ここはJSONの設計だけを担当し、素材生成とタイムライン配置はクライアント/MCP側が行う。
+const STORYBOARD_SYSTEM = [
+  "You are a short-form video director. You turn a brief into a storyboard for NOIZ LAB.",
+  "Reply with ONLY minified JSON. No code fences, no explanations.",
+  'Schema: {"title":"短い日本語タイトル(20文字以内)","logline":"何の動画か1文(50文字以内)","cuts":[{"purpose":"hook|explain|demonstrate|reveal|emotion|cta","duration":seconds(0.5-6),"shot":"画の内容を1文で(60文字以内)","caption":"画面に出す字幕(20文字以内、空文字可)","imagePrompt":"画像生成用の英語プロンプト(装飾語込みで25語以内)","preset":"Y2K|VHS|DREAM|PRINT|PIXEL|SORTED|CINEMA|FILM|NEON","motion":"orthographic-pullback|constant-linear|frame-echo|stagger|modular-grid|match-cut|controlled-chaos","transitionOut":"fade|wipe|dissolve|glitch|punch|flash|push|film-burn|null"}]}',
+  "The FIRST cut MUST be purpose hook and at most 2 seconds: the viewer decides in that time whether to keep watching.",
+  "The LAST cut MUST have transitionOut null. Every other cut needs a transition.",
+  "Vary the cut durations. Uniform lengths read as a slideshow, not a video.",
+  "The sum of durations MUST be within 10% of the requested duration.",
+  "Use 2-8 cuts. Fewer, longer cuts for a calm mood; more, shorter cuts for an energetic one.",
+  "Keep one preset for the whole piece unless the brief asks for a visual turn; consistency reads as intent.",
+  "captions must work with the sound off. Write them in the brief's language.",
+  "imagePrompt is always English regardless of the brief language, and must describe a still image with no text in it.",
+].join("\n");
+
+async function storyboardRoute(req, env, ai) {
+  if (!(await rateLimit(env, clientIp(req) + "#storyboard", 10))) {
+    return json({ error: "rate limited" }, 429);
+  }
+  let body;
+  try {
+    body = await req.json();
+  } catch {
+    return json({ error: "invalid json" }, 400);
+  }
+  const objective = body?.objective;
+  if (typeof objective !== "string" || !objective.trim() || objective.length > 1000) {
+    return json({ error: "invalid objective" }, 400);
+  }
+  const duration = Number(body?.duration) > 0 ? Math.min(180, Number(body.duration)) : 15;
+  const platform = String(body?.platform ?? "generic").slice(0, 40);
+  const audience = String(body?.audience ?? "").slice(0, 500);
+  const mood = (Array.isArray(body?.mood) ? body.mood : [])
+    .filter((m) => typeof m === "string" && m.trim())
+    .slice(0, 8)
+    .map((m) => m.slice(0, 80));
+  const language = String(body?.language ?? "ja").slice(0, 16);
+
+  const userMsg = [
+    `Objective: ${objective.trim()}`,
+    audience ? `Audience: ${audience}` : "Audience: unspecified",
+    `Platform: ${platform}`,
+    `Target duration: ${duration} seconds`,
+    mood.length ? `Mood: ${mood.join(", ")}` : "Mood: unspecified",
+    `Caption language: ${language}`,
+  ].join("\n");
+
+  if (!(await spendAiBudget(env, AI_COST.llm70b)).ok) return budgetExceeded();
+
+  try {
+    const raw = await ai.chat({
+      system: STORYBOARD_SYSTEM,
+      user: userMsg,
+      maxTokens: 1200,
+    });
+    // モデル/ランタイムによりresponseが文字列でなくパース済みの場合がある
+    const parsed = raw && typeof raw === "object" ? raw : extractJson(String(raw ?? ""));
+    if (!parsed || typeof parsed !== "object" || !Array.isArray(parsed.cuts) || !parsed.cuts.length) {
+      console.error("storyboard parse failed:", String(raw).slice(0, 200));
+      return json({ error: "parse failed" }, 502);
+    }
+    // 上限だけ守らせる。個々の値の正規化は受け手(MCP/クライアント)が行う
+    return json({ storyboard: { ...parsed, cuts: parsed.cuts.slice(0, 8) } });
+  } catch (e) {
+    const msg = e?.message ?? String(e);
+    console.error("storyboard failed:", msg);
+    if (msg.includes("4006") || msg.includes("neurons")) {
+      return json({ error: "quota exceeded" }, 503);
+    }
+    return json({ error: "storyboard failed" }, 500);
+  }
+}
+
 // ナレッジグラフの「穴」から次に作る作品を提案する。
 // 穴の検出はクライアント側で済ませ、ここは言語化だけを担当する。
 const SUGGEST_SYSTEM = [
@@ -855,6 +929,11 @@ export default {
       if (!authed(req, env)) return json({ error: "unauthorized" }, 401);
       const b = await spendAiBudget(env, 0);
       return json({ used: b.used, cap: b.cap, freeAllocation: 10000 });
+    }
+
+    if (pathname === "/api/storyboard" && req.method === "POST") {
+      if (!ai) return disabled("ai");
+      return tracked(env, req, "ai_storyboard", storyboardRoute(req, env, ai));
     }
 
     if (pathname === "/api/suggest" && req.method === "POST") {

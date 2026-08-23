@@ -6,7 +6,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import {
   CONSTANTS, ToolError, applyStyleBible, buildShortVideo, createProjectFromBrief,
-  renderProject, reviewHookAndPacing, validateProjectTool,
+  generateStoryboard, renderProject, reviewHookAndPacing, validateProjectTool,
 } from "./tools.mjs";
 
 const SERVER_INFO = { name: "noiz-lab", title: "NOIZ LAB", version: "1.0.0" };
@@ -15,7 +15,7 @@ const SERVER_INFO = { name: "noiz-lab", title: "NOIZ LAB", version: "1.0.0" };
 const PROTOCOL_VERSION = "2025-06-18";
 const SUPPORTED_PROTOCOLS = new Set([PROTOCOL_VERSION, "2025-03-26", "2024-11-05"]);
 
-const { PRESETS, TRANSITIONS, PLATFORMS, PURPOSES } = CONSTANTS;
+const { PRESETS, TRANSITIONS, PLATFORMS, PURPOSES, MOTIONS } = CONSTANTS;
 
 const projectSchema = { type: "object", description: "NOIZ LAB Project JSON (schemas/project.schema.json)" };
 
@@ -39,6 +39,55 @@ const TOOLS = [
       additionalProperties: false,
     },
     handler: createProjectFromBrief,
+  },
+  {
+    name: "generate_storyboard",
+    title: "Generate storyboard",
+    description: "フック・展開・締めを含む絵コンテを作ります。自分で書いた絵コンテを storyboard で渡すか、NOIZ LABのデプロイ先を endpoint で指定してサーバー側のLLMに書かせるか、どちらでも動きます。project を渡すと字幕とプリセットを取り込みます。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        project: { ...projectSchema, description: "省略可。渡すと絵コンテを取り込んだプロジェクトを返します" },
+        storyboard: {
+          type: "object",
+          description: "自分で書いた絵コンテ。endpoint より優先されます。",
+          required: ["cuts"],
+          properties: {
+            title: { type: "string", maxLength: 160 },
+            logline: { type: "string", maxLength: 200 },
+            cuts: {
+              type: "array",
+              minItems: 1,
+              maxItems: 8,
+              items: {
+                type: "object",
+                properties: {
+                  purpose: { enum: PURPOSES },
+                  duration: { type: "number", minimum: 0.5, maximum: 6 },
+                  shot: { type: "string", maxLength: 200, description: "画の内容" },
+                  caption: { type: "string", maxLength: 60, description: "画面に出す字幕" },
+                  imagePrompt: { type: "string", maxLength: 400, description: "画像生成用の英語プロンプト" },
+                  preset: { enum: PRESETS },
+                  motion: { enum: MOTIONS, description: "docs/motion-grammar.md の技法ID" },
+                  transitionOut: { enum: [...TRANSITIONS, null], description: "最後のカットは null" },
+                },
+              },
+            },
+          },
+        },
+        endpoint: { type: "string", maxLength: 2048, description: "NOIZ LABのURL。例: https://image-effector.example.workers.dev" },
+        objective: { type: "string", maxLength: 1000, description: "省略時は project.brief.objective" },
+        duration: { type: "number", minimum: 0, maximum: 3600, description: "目標の尺（秒）。カット尺はこれに合わせて調整されます" },
+        platform: { enum: PLATFORMS },
+        audience: { type: "string", maxLength: 500 },
+        mood: { type: "array", maxItems: 8, items: { type: "string", maxLength: 80 } },
+        language: { type: "string", maxLength: 16, description: "字幕の言語。既定は ja" },
+        timeoutMs: { type: "number", minimum: 1000, maximum: 120000, description: "endpoint 使用時のタイムアウト。既定は60000" },
+        keepTitle: { type: "boolean", default: false, description: "true にすると絵コンテのタイトルでプロジェクト名を上書きしません" },
+      },
+      additionalProperties: false,
+    },
+    handler: generateStoryboard,
   },
   {
     name: "apply_style_bible",
@@ -102,6 +151,7 @@ const TOOLS = [
         transitions: { type: "array", maxItems: 8, items: { enum: TRANSITIONS }, description: "順に巡回して使うトランジション" },
         transitionDuration: { type: "number", minimum: 0.2, maximum: 2, description: "トランジションの秒数。既定は0.9" },
         purposes: { type: "array", maxItems: 8, items: { enum: PURPOSES }, description: "各カットの役割。省略時は hook/explain/cta を自動割り当て" },
+        storyboard: { type: "object", description: "generate_storyboard の結果。渡すとカットごとの尺・役割・演出・つなぎがそのまま反映され、素材数と一致する必要があります" },
       },
       additionalProperties: false,
     },
@@ -223,7 +273,7 @@ async function handleRequest(message) {
       protocolVersion: version,
       capabilities: { tools: { listChanged: false } },
       serverInfo: SERVER_INFO,
-      instructions: "NOIZ LAB のショート動画プロジェクトを組み立てます。create_project_from_brief で構成案を作り、build_short_video で素材を並べ、review_hook_and_pacing で確認してから render_project でMP4を書き出します。プロジェクトは各ツールの戻り値の project をそのまま次のツールへ渡してください。",
+      instructions: "NOIZ LAB のショート動画プロジェクトを組み立てます。create_project_from_brief で構成案を作り、generate_storyboard で絵コンテを起こし、build_short_video で素材を並べ、review_hook_and_pacing で確認してから render_project でMP4を書き出します。プロジェクトは各ツールの戻り値の project をそのまま次のツールへ渡してください。絵コンテはあなた自身が書いて storyboard に渡せます（バックエンド不要）。",
     });
     return;
   }

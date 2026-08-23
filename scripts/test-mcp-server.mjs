@@ -9,9 +9,10 @@ import { dirname, join, resolve } from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { validateProject } from "../public/project-format.js";
+import { createServer } from "node:http";
 import {
   ToolError, applyStyleBible, buildShortVideo, createProjectFromBrief,
-  renderProject, reviewHookAndPacing,
+  generateStoryboard, renderProject, reviewHookAndPacing,
 } from "../mcp/tools.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -149,6 +150,188 @@ throws(
   }),
   /at most 8 cuts/,
   "too many cuts",
+);
+
+// --- generate_storyboard ----------------------------------------------------
+
+// A caller-written storyboard: the MCP client is itself an LLM, so this path
+// works with no backend at all.
+const handWritten = {
+  title: "夜のメモアプリ",
+  logline: "深夜に書きなぐるためのメモアプリ",
+  cuts: [
+    { purpose: "hook", duration: 1.5, shot: "暗い机", caption: "深夜2時", imagePrompt: "dark desk at night", preset: "NEON", motion: "frame-echo", transitionOut: "glitch" },
+    { purpose: "demonstrate", duration: 4, shot: "入力", caption: "開いて即入力", imagePrompt: "typing on a laptop", preset: "NEON", motion: "modular-grid", transitionOut: "fade" },
+    { purpose: "cta", duration: 4, shot: "ロゴ", caption: "今すぐ", imagePrompt: "app logo glowing", preset: "NEON", motion: "match-cut", transitionOut: "dissolve" },
+  ],
+};
+
+const boardOnly = await generateStoryboard({ storyboard: handWritten, duration: 9, language: "ja" });
+assert.equal(boardOnly.source, "caller");
+assert.equal(boardOnly.project, undefined, "without a project only the storyboard comes back");
+assert.equal(boardOnly.storyboard.cuts.length, 3);
+assert.equal(boardOnly.storyboard.totalDuration, 9, "cuts are rescaled to the requested duration");
+assert.equal(boardOnly.storyboard.cuts.at(-1).transitionOut, null, "the last cut must not transition");
+assert.equal(boardOnly.storyboard.cuts[0].transitionOut, "glitch");
+
+// Rescaling: the same board asked for 15s must still sum to 15s.
+const rescaled = await generateStoryboard({ storyboard: handWritten, duration: 15 });
+assert.equal(rescaled.storyboard.totalDuration, 15);
+
+// The hook is the one cut whose length is deliberate — it has to land in about
+// two seconds. Stretching it to fill a longer target defeats the storyboard, so
+// a short hook is held and the other cuts absorb the change.
+{
+  const board = {
+    cuts: [
+      { purpose: "hook", duration: 1.8, transitionOut: "glitch" },
+      { purpose: "demonstrate", duration: 6.5, transitionOut: "fade" },
+      { purpose: "cta", duration: 6.7, transitionOut: null },
+    ],
+  };
+  const grown = await generateStoryboard({ storyboard: board, duration: 9 });
+  assert.equal(grown.storyboard.cuts[0].duration, 1.8, "a short hook survives rescaling");
+  assert.equal(grown.storyboard.totalDuration, 9);
+
+  // Protection is preferred, not absolute: when every other cut is already at
+  // the 6s ceiling, releasing the hook beats silently missing the target.
+  const forced = await generateStoryboard({ storyboard: board, duration: 18 });
+  assert.equal(forced.storyboard.totalDuration, 18, "an achievable target must be hit");
+  assert.ok(forced.storyboard.cuts[0].duration > 1.8, "the hook is released when nothing else has headroom");
+
+  // A hook that was already long is not protected.
+  const longHook = await generateStoryboard({
+    storyboard: { cuts: [{ purpose: "hook", duration: 5, transitionOut: "fade" }, { purpose: "cta", duration: 5, transitionOut: null }] },
+    duration: 6,
+  });
+  assert.equal(longHook.storyboard.totalDuration, 6);
+  assert.equal(longHook.storyboard.cuts[0].duration, 3, "a long hook rescales like any other cut");
+
+  // A target below the structural minimum cannot be met; it must stay honest
+  // rather than inventing sub-0.5s cuts, and totalDuration shows the truth.
+  const tooShort = await generateStoryboard({ storyboard: board, duration: 1 });
+  assert.equal(tooShort.storyboard.totalDuration, 1.5, "3 cuts cannot go below 0.5s each");
+  assert.ok(tooShort.storyboard.cuts.every((c) => c.duration >= 0.5));
+}
+
+// Junk fields are repaired rather than rejected, so one bad value does not throw
+// away an otherwise usable storyboard.
+const messy = await generateStoryboard({
+  storyboard: {
+    cuts: [
+      { purpose: "nonsense", duration: 999, preset: "NOT_A_PRESET", motion: "wiggle", transitionOut: "teleport" },
+      { duration: -5 },
+    ],
+  },
+  duration: 6,
+});
+assert.equal(messy.storyboard.cuts[0].purpose, "hook", "an unknown purpose falls back by position");
+assert.equal(messy.storyboard.cuts[0].preset, null, "an unknown preset is dropped, not guessed");
+assert.equal(messy.storyboard.cuts[0].motion, "orthographic-pullback");
+assert.equal(messy.storyboard.cuts[0].transitionOut, "fade", "an unknown transition falls back");
+assert.ok(messy.storyboard.cuts.every((c) => c.duration >= 0.5 && c.duration <= 6), "durations are clamped");
+assert.equal(messy.storyboard.cuts.at(-1).purpose, "cta");
+
+// Folding a storyboard into a project pulls in captions and the preset.
+const briefForBoard = createProjectFromBrief({ objective: "メモアプリ紹介", platform: "youtube-shorts", duration: 9 });
+const folded = await generateStoryboard({ project: briefForBoard.project, storyboard: handWritten, duration: 9 });
+assert.equal(folded.project.title, "夜のメモアプリ", "the storyboard title wins by default");
+assert.equal(folded.project.captions.length, 3, "captions come across");
+assert.equal(folded.project.captions[0].text, "深夜2時");
+assert.equal(folded.project.editor.recipe.preset, "NEON", "the dominant preset is adopted");
+assert.deepEqual(validateProject(folded.project), { valid: true, errors: [] });
+
+const keptTitle = await generateStoryboard({
+  project: briefForBoard.project, storyboard: handWritten, duration: 9, keepTitle: true,
+});
+assert.equal(keptTitle.project.title, briefForBoard.project.title, "keepTitle preserves the project name");
+
+await assert.rejects(
+  () => generateStoryboard({ storyboard: { cuts: [] }, duration: 5 }),
+  /at least one cut/,
+  "an empty storyboard is rejected",
+);
+await assert.rejects(
+  () => generateStoryboard({ objective: "x" }),
+  /pass storyboard .* or endpoint/,
+  "one of storyboard or endpoint is required",
+);
+await assert.rejects(
+  () => generateStoryboard({ objective: "x", endpoint: "not a url" }),
+  /not a valid URL/,
+  "a malformed endpoint is caught before fetching",
+);
+await assert.rejects(
+  () => generateStoryboard({ objective: "x", endpoint: "file:///etc/passwd" }),
+  /must be http or https/,
+  "non-http endpoints are refused",
+);
+
+// The endpoint path, against a stub standing in for the Worker.
+{
+  const stub = createServer((req, res) => {
+    let body = "";
+    req.on("data", (d) => { body += d; });
+    req.on("end", () => {
+      const sent = JSON.parse(body);
+      if (req.url !== "/api/storyboard") { res.writeHead(404).end("{}"); return; }
+      res.writeHead(200, { "content-type": "application/json" });
+      // Echo the objective back so the test can prove the brief was forwarded.
+      res.end(JSON.stringify({ storyboard: { title: sent.objective, cuts: handWritten.cuts } }));
+    });
+  });
+  await new Promise((ok) => stub.listen(0, "127.0.0.1", ok));
+  const base = `http://127.0.0.1:${stub.address().port}`;
+  try {
+    const viaHttp = await generateStoryboard({ objective: "遠隔から絵コンテ", endpoint: base, duration: 9 });
+    assert.equal(viaHttp.source, `${base}/api/storyboard`);
+    assert.equal(viaHttp.storyboard.title, "遠隔から絵コンテ", "the brief must reach the endpoint");
+    assert.equal(viaHttp.storyboard.cuts.length, 3);
+    // A path on the endpoint is replaced by /api/storyboard, not appended to.
+    const viaPath = await generateStoryboard({ objective: "x", endpoint: `${base}/some/page`, duration: 9 });
+    assert.equal(viaPath.source, `${base}/api/storyboard`);
+  } finally {
+    await new Promise((ok) => stub.close(ok));
+  }
+}
+
+// A server that is down must surface as a clear tool error, not a raw fetch throw.
+await assert.rejects(
+  () => generateStoryboard({ objective: "x", endpoint: "http://127.0.0.1:1", duration: 9, timeoutMs: 2000 }),
+  (e) => e instanceof ToolError && /could not reach/.test(e.message),
+  "an unreachable endpoint is a tool error",
+);
+
+// --- build_short_video driven by a storyboard -------------------------------
+
+const boardBuilt = buildShortVideo({
+  project: folded.project,
+  assets: frames.slice(0, 3).map((path) => ({ path })),
+  storyboard: handWritten,
+  duration: 9,
+});
+const boardClips = boardBuilt.project.timeline.tracks[0].clips;
+assert.equal(boardBuilt.summary.storyboardDriven, true);
+assert.equal(boardBuilt.summary.hold, null, "a per-cut storyboard has no single hold");
+// The director's pacing must survive rather than being flattened to one length.
+assert.ok(new Set(boardClips.map((c) => c.duration)).size > 1, "storyboard pacing must not be flattened");
+assert.equal(boardClips[0].duration, boardOnly.storyboard.cuts[0].duration);
+assert.deepEqual(boardClips.map((c) => c.purpose), ["hook", "demonstrate", "cta"]);
+assert.equal(boardClips[0].motion[0].id, "frame-echo", "storyboard motion is carried onto the clip");
+assert.equal(boardClips[0].transitionOut.technique, "glitch");
+assert.equal(boardClips.at(-1).transitionOut, null);
+assert.equal(boardClips[0].recipe.preset, "NEON");
+assert.equal(boardBuilt.summary.totalDuration, 9);
+assert.deepEqual(validateProject(boardBuilt.project), { valid: true, errors: [] });
+
+throws(
+  () => buildShortVideo({
+    project: folded.project,
+    assets: frames.map((path) => ({ path })),
+    storyboard: handWritten,
+  }),
+  /storyboard has 3 cuts but 4 assets/,
+  "a storyboard must match the asset count",
 );
 
 // --- review_hook_and_pacing -------------------------------------------------

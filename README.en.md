@@ -166,6 +166,7 @@ claude mcp add noiz-lab -- node /path/to/image_effector/mcp/server.mjs
 | Tool | Role |
 |---|---|
 | `create_project_from_brief` | Turn an objective, audience, duration and platform into a project plus a cut plan |
+| `generate_storyboard` | Write a storyboard with a hook, a middle and a close |
 | `apply_style_bible` | Push colour, lighting, framing and a preset across every cut |
 | `build_short_video` | Lay assets onto the timeline with BPM-aware pacing and transitions |
 | `review_hook_and_pacing` | Check the hook, pacing, duration, captions and aspect ratio; return findings and a score |
@@ -173,16 +174,22 @@ claude mcp add noiz-lab -- node /path/to/image_effector/mcp/server.mjs
 | `read_project` / `write_project` | Read and write Project JSON, interchangeable with the web app |
 | `validate_project` | Check a project against the shared schema |
 
+`generate_storyboard` works two ways. The MCP client is itself an LLM, so it can write
+the storyboard and pass it as `storyboard` — **no backend required**. Or pass `endpoint`,
+a deployed NOIZ LAB instance, and its `/api/storyboard` writes one. A storyboard carries
+a purpose, duration, shot, caption, image prompt, motion and transition per cut; hand it
+to `build_short_video` and that pacing lands on the timeline as written.
+
 Pass the `project` from each result straight into the next tool:
 
 ```text
-create_project_from_brief → apply_style_bible → build_short_video
-  → review_hook_and_pacing → render_project
+create_project_from_brief → generate_storyboard → apply_style_bible
+  → build_short_video → review_hook_and_pacing → render_project
 ```
 
-Storyboard and asset generation (`generate_storyboard`, `generate_missing_assets`) and
-posting (`export_for_tiktok`) are not implemented. `render_project` currently handles
-only assets whose `source.kind` is `local`, up to 8 cuts, holding each 0.3–3s.
+Asset generation (`generate_missing_assets`) and posting (`export_for_tiktok`) are not
+implemented. `render_project` currently handles only assets whose `source.kind` is
+`local`, up to 8 cuts, holding each 0.3–3s.
 
 Rendering is a multi-pass pipeline: source (＋ CPU pixel sort) → separable Gaussian
 blur → luminance extraction + blur (halation) → a final composite shader handling

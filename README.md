@@ -42,22 +42,41 @@ NOIZ LABが目指すのは、**素材を入れて雰囲気を選ぶだけで、S
 
 演出は「なんか派手に」という曖昧な指定ではなく、コマ打ち、ポーズ置換、図形置換、形状変形、シルエット接続、マッチカット、時間差、グリッド運動、残像、版ズレ、網点、コラージュなどの**モーション文法**として理解・選択・合成します。役割、パラメータ、組み合わせ方、Storyboard JSON例は[NOIZ LAB Motion Grammar](docs/motion-grammar.md)を参照してください。
 
-### MCP／エージェント連携（構想中）
+### MCP／エージェント連携
 
-Web、Desktop、Mobile、Codex、Claude Codeが同じプロジェクトデータを扱えるよう、編集機能をMCPツールとして公開する構想です。想定する操作は次のとおりです。
+Claude CodeなどのMCPクライアントから、企画・編集・確認・書き出しを操作できます。
+依存パッケージは無く、`node mcp/server.mjs` だけで動きます。
 
-| MCPツール案 | 役割 |
+```jsonc
+// Claude Codeなら: claude mcp add noiz-lab -- node /path/to/image_effector/mcp/server.mjs
+{
+  "mcpServers": {
+    "noiz-lab": { "command": "node", "args": ["/path/to/image_effector/mcp/server.mjs"] }
+  }
+}
+```
+
+| MCPツール | 役割 |
 |---|---|
-| `create_project_from_brief` | 目的、対象視聴者、尺、投稿先からプロジェクトを作成 |
-| `generate_storyboard` | フック、展開、締めを含む絵コンテJSONを生成 |
-| `generate_missing_assets` | 参照素材とスタイルバイブルに沿って不足カットを生成 |
-| `apply_style_bible` | 色、画角、字幕、エフェクトなどを全カットへ統一適用 |
+| `create_project_from_brief` | 目的・対象視聴者・尺・投稿先からプロジェクトと構成案を作成 |
+| `apply_style_bible` | 色・照明・画角・プリセットを全カットへ統一適用 |
 | `build_short_video` | 素材をタイムラインへ並べ、BPMとトランジションを設定 |
-| `review_hook_and_pacing` | 冒頭、字幕、テンポ、縦画面の見切れを確認して改善案を返す |
-| `render_preview` | 軽量な確認用動画を書き出す |
-| `export_for_tiktok` | TikTok向けMP4を生成し、将来は認証後の投稿処理へ接続 |
+| `review_hook_and_pacing` | 冒頭・テンポ・尺・字幕・縦横比を検査し、指摘とスコアを返す |
+| `render_project` | タイムラインをMP4へ書き出す（ヘッドレスChromeとffmpegが必要） |
+| `read_project` / `write_project` | Project JSONの読み書き。Web版とそのまま行き来できる |
+| `validate_project` | 共通スキーマに沿っているか検証 |
 
-MCPは操作の入口とし、プロジェクト、素材、レンダリング処理はアプリ側が管理します。これにより、Webで始めた編集をDesktopやMobileで続けたり、エージェントへ自然言語で修正を依頼したりできる構成を目指します。
+素材とレンダリング処理はアプリ側（`scripts/noizlab-variety-video.mjs`）が持ち、MCPは操作の入口に徹します。
+各ツールは戻り値の `project` をそのまま次のツールへ渡す形で連結します。
+
+```text
+create_project_from_brief → apply_style_bible → build_short_video
+  → review_hook_and_pacing → render_project
+```
+
+`generate_storyboard` / `generate_missing_assets`（AI生成）と `export_for_tiktok`（投稿API）は未実装です。
+現状 `render_project` が扱えるのは `source.kind` が `local` の素材のみで、
+1本あたり最大8カット、1カットの保持時間は0.3〜3秒です。
 
 ## 作例（AIシーン生成）
 
@@ -195,6 +214,9 @@ src/
   ai.js          AIプロバイダの抽象化（workers-ai / openai / none）
 schema.sql       D1スキーマ
 schemas/         Web / Desktop / Mobile / MCPで共有するJSON Schema
+mcp/
+  server.mjs     MCPサーバー（stdio / JSON-RPC、依存パッケージ無し）
+  tools.mjs      Project JSONを組み立てるツール本体
 wrangler.jsonc   Workers設定（fork時は name / database_id / bucket_name を変更）
 ```
 
@@ -250,6 +272,9 @@ curl "https://api.cloudflare.com/client/v4/accounts/$ACCOUNT_ID/analytics_engine
 ```sh
 npx wrangler dev      # ローカル（localhost のAIエンドポイントにも到達できる）
 npx wrangler deploy   # デプロイ
+
+node scripts/test-project-format.mjs   # Project JSONの往復テスト
+node scripts/test-mcp-server.mjs       # MCPツールとstdio越しのJSON-RPC
 ```
 
 ### Codex / Claude Code から画像を加工
@@ -314,7 +339,8 @@ MIT License（[LICENSE](LICENSE)）。
 - [ ] 字幕生成、分割、カット別トランジション、フック／テンポの自動レビュー
 - [x] 共通Project JSONと素材埋め込み入出力
 - [ ] クラウド同期（Web / Desktop / Mobile）
-- [ ] MCPサーバーから企画・生成・編集・プレビュー・書き出しを操作
+- [x] MCPサーバーから企画・編集・レビュー・書き出しを操作
+- [ ] MCPからのAI絵コンテ生成・不足素材生成
 - [ ] TikTok Content Posting APIを使った下書き／直接投稿
 - [ ] エフェクトの並び替え（現在は適用順が固定。COLOR GRADEのみ前後を切替可）
 - [ ] AI img2img（無料枠で動くモデルが見つからず保留）

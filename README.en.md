@@ -139,15 +139,50 @@ Copy `.dev.vars.example` to `.dev.vars` to get started.
 ```
 public/          Static assets (this alone runs as Tier 1)
   app.js         WebGL2 pipeline, UI, pixel sort, GIF encoder, graph
+  project-format.js  Shared Project JSON builder, validator and parser
   i18n.js        Japanese/English strings
   analytics.js   Usage event sender (a no-op when there is no endpoint)
   about.html     About page (about-en.html for English)
 src/
   worker.js      API routing, gallery, sharing, rate limiting
   ai.js          AI provider abstraction (workers-ai / openai / none)
+mcp/
+  server.mjs     MCP server (stdio JSON-RPC, no dependencies)
+  tools.mjs      The tools that assemble a Project JSON
 schema.sql       D1 schema
+schemas/         JSON Schema shared by Web / Desktop / Mobile / MCP
 wrangler.jsonc   Workers config (change name / database_id / bucket_name when forking)
 ```
+
+### MCP server
+
+Drive the planning, editing, review and export steps from an MCP client such as
+Claude Code. It has no dependencies — `node mcp/server.mjs` is the whole thing.
+
+```sh
+claude mcp add noiz-lab -- node /path/to/image_effector/mcp/server.mjs
+```
+
+| Tool | Role |
+|---|---|
+| `create_project_from_brief` | Turn an objective, audience, duration and platform into a project plus a cut plan |
+| `apply_style_bible` | Push colour, lighting, framing and a preset across every cut |
+| `build_short_video` | Lay assets onto the timeline with BPM-aware pacing and transitions |
+| `review_hook_and_pacing` | Check the hook, pacing, duration, captions and aspect ratio; return findings and a score |
+| `render_project` | Export the timeline to MP4 (needs headless Chrome and ffmpeg) |
+| `read_project` / `write_project` | Read and write Project JSON, interchangeable with the web app |
+| `validate_project` | Check a project against the shared schema |
+
+Pass the `project` from each result straight into the next tool:
+
+```text
+create_project_from_brief → apply_style_bible → build_short_video
+  → review_hook_and_pacing → render_project
+```
+
+Storyboard and asset generation (`generate_storyboard`, `generate_missing_assets`) and
+posting (`export_for_tiktok`) are not implemented. `render_project` currently handles
+only assets whose `source.kind` is `local`, up to 8 cuts, holding each 0.3–3s.
 
 Rendering is a multi-pass pipeline: source (＋ CPU pixel sort) → separable Gaussian
 blur → luminance extraction + blur (halation) → a final composite shader handling
@@ -199,6 +234,9 @@ curl "https://api.cloudflare.com/client/v4/accounts/$ACCOUNT_ID/analytics_engine
 ```sh
 npx wrangler dev      # local (can reach a localhost AI endpoint)
 npx wrangler deploy
+
+node scripts/test-project-format.mjs   # Project JSON round-trip
+node scripts/test-mcp-server.mjs       # MCP tools and JSON-RPC over stdio
 ```
 
 ## About cost

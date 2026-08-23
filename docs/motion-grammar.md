@@ -157,6 +157,18 @@ Web版のレンダラー（`public/app.js`）が実際に描けるのは、静�
 | `halftone` | 輝度を網点の大きさへ変換する | `frequency`（横方向の網点数）, `angle`（度）, `amount` |
 | `cmyk-misregistration` | CMYの3版を独立した向きへずらす | `amount`, `angle`（度）, `jitter` |
 
+接続技法（カット間）は `motion[]` ではなく `transitionOut` に載ります。Web版の既存トランジション8種と同じ仕組みで描きますが、UIのボタンには出さずProject JSON経由でのみ指定します。
+
+| 技法 | 描画 | 主に効くパラメータ |
+|---|---|---|
+| `track-matte` | 前カットの明るい部分を入口に次の画を見せる | `feather`, `invert` |
+| `radial-wipe` | 中心・開始角・回転方向を持つ円形の転換 | `center`, `startAngle`, `direction` |
+| `silhouette-match` | 前後の外形が一致する場所から先に入れ替える | `threshold` |
+
+`track-matte` のしきい値は画の明るさの分布に合わせて正規化しています。輝度の絶対値で切ると、暗い画では大半が最後まで開かず終盤に急変するためです。
+
+**書き出しの制約**: 接続技法を描けるのはWeb版のプレビュー／書き出しだけです。CLI（`scripts/noizlab-variety-video.mjs`）経由の `render_project` はこれらを知らないため既定のつなぎになり、`unsupportedTransitions` でその旨を返します。Project JSONには技法名が残ります。
+
 `halftone` は `amount` を省略するとカット終盤へ向けて効きが強まります。`cmyk-misregistration` の `jitter` は1カット内でずれ量を揺らし、手押しの見当ずれのような不安定さを出します。既存のエフェクト「色収差」は水平方向のRGBずらしで、版ズレとは別のものです。
 
 上記以外の技法を指定しても**エラーにはならず、JSONにはその技法名が残ります**。描画だけが `ken-burns` へフォールバックする形なので、Desktopレンダラーや動画生成モデルへ差し替えたときに本来の表現で再レンダリングできます。

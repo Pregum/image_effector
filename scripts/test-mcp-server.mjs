@@ -863,6 +863,104 @@ async function webAppWouldOpen(manifest) {
   assert.equal(unknown.kind, 0, "未実装の質感は描画しない");
 }
 
+// --- connection techniques (transitionOut) ----------------------------------
+
+// track-matte / radial-wipe / silhouette-match はカット「間」の技法なので
+// motion[] ではなく transitionOut に載る。既存の8種と同じ仕組みで描くが、
+// UIのボタンには出さずProject JSON経由でのみ指定する。
+{
+  const appSource3 = await readFile(join(ROOT, "public/app.js"), "utf8");
+
+  const connectTechniques = ["track-matte", "radial-wipe", "silhouette-match"];
+  for (const technique of connectTechniques) {
+    assert.ok(CONSTANTS.TRANSITIONS.includes(technique), `${technique} を絵コンテから指定できない`);
+  }
+
+  // レンダラーの並び順がそのまま u_mode になるので、MCP側と一致していないと
+  // 別の技法が描かれる。順序込みで突き合わせる。
+  const listSrc = appSource3.match(/const TRANSITION_TECHNIQUES = \[([\s\S]*?)\];/)?.[1];
+  assert.ok(listSrc, "public/app.js に TRANSITION_TECHNIQUES が見つからない");
+  const appTechniques = [...listSrc.matchAll(/"([a-z-]+)"/g)].map((m) => m[1]);
+  assert.deepEqual(
+    appTechniques, CONSTANTS.TRANSITIONS,
+    "レンダラーとMCPのトランジション一覧は順序込みで一致していないといけない（添字がu_mode）",
+  );
+
+  // UIに出す数を超えた技法が来ても、一括選択が範囲外を指さないこと。
+  const uiCount = Number(appSource3.match(/const UI_TRANSITION_COUNT = (\d+);/)?.[1]);
+  assert.ok(Number.isFinite(uiCount) && uiCount > 0, "UI_TRANSITION_COUNT が読めない");
+  for (const technique of connectTechniques) {
+    assert.ok(
+      appTechniques.indexOf(technique) >= uiCount,
+      `${technique} はUIボタンの範囲外に置く想定`,
+    );
+  }
+
+  const sb = await generateStoryboard({
+    project: createProjectFromBrief({ objective: "connect", duration: 9 }).project,
+    storyboard: {
+      cuts: [
+        { purpose: "hook", duration: 3, transitionOut: "track-matte", imagePrompt: "a" },
+        { purpose: "explain", duration: 3, transitionOut: "silhouette-match", imagePrompt: "b" },
+        { purpose: "cta", duration: 3, transitionOut: null, imagePrompt: "c" },
+      ],
+    },
+    duration: 9,
+  });
+  assert.equal(sb.storyboard.cuts[0].transitionOut, "track-matte");
+  assert.equal(sb.storyboard.cuts[1].transitionOut, "silhouette-match");
+
+  const connBuilt = buildShortVideo({
+    project: sb.project,
+    assets: frames.slice(0, 3).map((path) => ({ path })),
+    storyboard: sb.storyboard,
+    duration: 9,
+  });
+  const cClips = connBuilt.project.timeline.tracks[0].clips;
+  assert.equal(cClips[0].transitionOut.technique, "track-matte");
+  assert.equal(cClips[1].transitionOut.technique, "silhouette-match");
+  assert.equal(cClips[2].transitionOut, null);
+  assert.deepEqual(validateProject(connBuilt.project), { valid: true, errors: [] });
+
+  // 書き出し経路(既存CLI)は接続技法を知らない。黙って別の絵を出すのではなく、
+  // 落としたことを伝える。
+  await assert.rejects(
+    () => renderProject({ project: connBuilt.project, output: "out.webm" }),
+    /must end in \.mp4/,
+    "guard still applies",
+  );
+  const toolsSrc = await readFile(join(ROOT, "mcp/tools.mjs"), "utf8");
+  const cliSet = toolsSrc.match(/const CLI_TRANSITIONS = new Set\(\[([^\]]*)\]\)/)?.[1];
+  assert.ok(cliSet, "CLI_TRANSITIONS が見つからない");
+  const cliList = [...cliSet.matchAll(/"([a-z-]+)"/g)].map((m) => m[1]);
+  for (const technique of connectTechniques) {
+    assert.ok(!cliList.includes(technique), `${technique} をCLIへ渡してはいけない`);
+  }
+  // CLIが受け付ける8種はすべて渡せること（絞りすぎていないか）
+  for (const technique of CONSTANTS.TRANSITIONS.slice(0, 8)) {
+    assert.ok(cliList.includes(technique), `${technique} はCLIへ渡せるはず`);
+  }
+
+  // 接続技法のパラメータ詰めがNaNを出さないこと。u_connectへNaNが流れると
+  // 画が壊れるのは表面表現のときと同じ。
+  const connectSrc = appSource3.match(/function connectParams\([\s\S]*?\n\}/)?.[0];
+  assert.ok(connectSrc, "connectParams が見つからない");
+  const numParamSrc2 = appSource3.match(/function numParam\([\s\S]*?\n\}/)[0];
+  const connectParams = new Function(`${numParamSrc2} ${connectSrc} return connectParams;`)();
+  for (const technique of connectTechniques) {
+    for (const params of [{}, { feather: null }, { threshold: "x" }, { center: [null, undefined] }, { startAngle: 0 }]) {
+      const out = connectParams(technique, params);
+      assert.equal(out.length, 4, `${technique} は vec4 を返すこと`);
+      for (const [i, v] of out.entries()) {
+        assert.ok(Number.isFinite(v), `${technique} params=${JSON.stringify(params)} の [${i}] が ${v}`);
+      }
+    }
+  }
+  // 中心座標は0-1へ収める（画面外を指すと何も出ない）
+  const wild = connectParams("radial-wipe", { center: [9, -9] });
+  assert.ok(wild[2] >= 0 && wild[2] <= 1 && wild[3] >= 0 && wild[3] <= 1, "中心は0-1に収める");
+}
+
 // --- JSON-RPC over stdio ----------------------------------------------------
 
 class Client {

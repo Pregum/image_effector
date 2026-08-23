@@ -14,7 +14,15 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const VARIETY_CLI = join(ROOT, "scripts/noizlab-variety-video.mjs");
 
 const PRESETS = ["RESET", "Y2K", "VHS", "DREAM", "PRINT", "PIXEL", "SORTED", "CINEMA", "FILM", "NEON"];
-const TRANSITIONS = ["fade", "wipe", "dissolve", "glitch", "punch", "flash", "push", "film-burn"];
+// 後半3つはモーション文法の接続技法。Web版のUIボタンには出ず、
+// Project JSON（＝絵コンテやMCP）経由でのみ指定する。
+const TRANSITIONS = [
+  "fade", "wipe", "dissolve", "glitch", "punch", "flash", "push", "film-burn",
+  "track-matte", "radial-wipe", "silhouette-match",
+];
+// 既存CLI(scripts/noizlab-variety-video.mjs)が --transitions で受け付ける範囲。
+// 接続技法はCLI側が知らないので、render_project では既定へ倒す。
+const CLI_TRANSITIONS = new Set(["fade", "wipe", "dissolve", "glitch", "punch", "flash", "push", "film-burn"]);
 const PLATFORMS = ["generic", "tiktok", "instagram-reels", "youtube-shorts", "presentation"];
 const PURPOSES = ["hook", "explain", "demonstrate", "reveal", "emotion", "cta", "unspecified"];
 
@@ -885,7 +893,11 @@ export async function renderProject(args = {}) {
     return `${asset.source.ref}@${preset}`;
   });
 
-  const transitions = clips.slice(0, -1).map((c) => c.transitionOut?.technique).filter((t) => TRANSITIONS.includes(t));
+  // CLIは接続技法を知らないため、渡すのはCLIが受け付けるものだけにする。
+  // 落とした分はCLI側の既定が使われる（JSONには技法名が残る）。
+  const wanted = clips.slice(0, -1).map((c) => c.transitionOut?.technique).filter(Boolean);
+  const transitions = wanted.filter((t) => CLI_TRANSITIONS.has(t));
+  const droppedTransitions = [...new Set(wanted.filter((t) => !CLI_TRANSITIONS.has(t)))];
   const transitionDuration = clamp(round(clips[0].transitionOut?.duration ?? 0.9), 0.2, 2);
 
   // The CLI renders pairwise clips (cut1→cut2, cut2→cut3, ...) and concatenates
@@ -913,6 +925,11 @@ export async function renderProject(args = {}) {
     transitions,
     timelineDuration: round(timelineDuration),
     ...(materialized ? { materializedAssets: materialized } : {}),
+    ...(droppedTransitions.length ? {
+      unsupportedTransitions: droppedTransitions,
+      transitionNote: `${droppedTransitions.join(" / ")} はこの書き出し経路（既存CLI）では描けないため既定のつなぎになります。`
+        + " Web版のプレビューでは指定どおりに描画され、Project JSONにも技法名は残ります。",
+    } : {}),
     // Measured, not predicted. The export records the browser's live playback
     // through MediaRecorder, so the file's length depends on how fast the
     // machine actually renders: identical inputs measured 2.88s / 3.70s / 4.01s

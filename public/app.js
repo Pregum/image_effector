@@ -73,6 +73,11 @@ uniform int u_techB;
 // x: 0:none 1:halftone 2:cmyk-misregistration, y:強度, z:周波数/ずれ量, w:角度
 uniform vec4 u_surfA;
 uniform vec4 u_surfB;
+// カット間の接続技法のパラメータ。技法ごとに意味が変わる:
+// track-matte      x:invert y:feather
+// radial-wipe      x:direction y:startAngle zw:center
+// silhouette-match y:threshold
+uniform vec4 u_connect;
 float th(float n) { return fract(sin(n * 127.1 + u_seed2 * 311.7) * 43758.5453); }
 float th2(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7)) + u_seed2 * 17.0) * 43758.5453); }
 // 1カット分の画をモーション付きで取り出す。平行移動と拡大は全技法共通で、
@@ -196,7 +201,7 @@ void main() {
     float seam = smoothstep(-0.008, 0.008, uv.x - (1.0 - t));
     o = mix(ca, cb, seam);
     o.rgb *= 1.0 - 0.12 * exp(-abs(uv.x - (1.0 - t)) * 65.0);
-  } else {
+  } else if (u_mode == 7) {
     // フィルムバーン: 粒状の露光境界と暖色の焼け
     float n = th2(floor(uv * u_res / 10.0));
     float sweep = uv.x * 0.76 + uv.y * 0.24 + (n - 0.5) * 0.20;
@@ -205,6 +210,59 @@ void main() {
     float edge = 1.0 - smoothstep(0.015, 0.13, abs(sweep - edgeAt));
     o = mix(B, A, reveal);
     o.rgb += edge * vec3(1.15, 0.34, 0.035) * (0.75 + n * 0.45);
+  } else if (u_mode == 8) {
+    // track-matte: 前カットの明るい部分を入口にして次の画を見せる。
+    // マスクは画そのものの輝度から作るので、追加の入力を必要としない。
+    float lum = dot(A.rgb, vec3(0.299, 0.587, 0.114));
+    // 明るいところから順に開く。輝度の絶対値でしきい値を切ると、暗い画では
+    // 大半が最後まで開かず終盤に急変する。実際の分布へ寄せるため、周囲を
+    // 粗く見て取った基準で正規化してから切る。
+    vec2 step_ = vec2(0.19, 0.23);
+    float ref = 0.0;
+    for (int i = 0; i < 4; i++) {
+      vec2 q = fract(v_uv + step_ * float(i + 1));
+      ref = max(ref, dot(sA(q).rgb, vec3(0.299, 0.587, 0.114)));
+    }
+    // refが小さい(全体に暗い)ほどしきい値も下げ、開き方を画に合わせる
+    float span = max(0.25, ref);
+    float thresh = span * (1.12 - t * 1.24);
+    float feather = max(0.02, u_connect.y) * span;
+    float m = smoothstep(thresh - feather, thresh + feather, lum);
+    if (u_connect.x > 0.5) m = 1.0 - m; // invert
+    // 開き際に少しだけ発光させて、切れ目ではなく「抜けた」ように見せる
+    float rim = (1.0 - abs(m - 0.5) * 2.0) * sin(t * 3.14159);
+    o = mix(A, B, m);
+    o.rgb += rim * 0.22 * vec3(1.0, 0.96, 0.9);
+  } else if (u_mode == 9) {
+    // radial-wipe: 中心・開始角・回転方向を持つ円形の転換
+    vec2 c = vec2(u_connect.z, u_connect.w);
+    vec2 d = uv - c;
+    // アスペクト比を補正しないと楕円に回る
+    d.x *= u_res.x / max(u_res.y, 1.0);
+    float ang = atan(d.y, d.x) + 3.14159;
+    float start = u_connect.y;
+    float dir = u_connect.x > 0.5 ? -1.0 : 1.0;
+    float swept = fract((ang - start) * dir / 6.28318);
+    float m = smoothstep(t - 0.03, t + 0.03, swept);
+    o = mix(B, A, m);
+    // 掃過する辺を薄く光らせる
+    o.rgb += (1.0 - smoothstep(0.0, 0.035, abs(swept - t))) * 0.18;
+  } else {
+    // silhouette-match: 前後の外形が似ているところでつなぐ。
+    // 両カットの輝度マスクの一致度を見て、揃っている場所から先に入れ替える。
+    float la = dot(A.rgb, vec3(0.299, 0.587, 0.114));
+    float lb = dot(B.rgb, vec3(0.299, 0.587, 0.114));
+    float thr = max(0.05, u_connect.y);
+    // 外形（明暗の二値）が一致している画素ほど早く切り替える
+    float sa = step(thr, la);
+    float sb = step(thr, lb);
+    float agree = 1.0 - abs(sa - sb);
+    float bias = mix(1.35, 0.0, agree); // 一致しない場所は遅らせる
+    float m = smoothstep(0.0, 1.0, clamp(t * 2.0 - bias * 0.75, 0.0, 1.0));
+    o = mix(A, B, m);
+    // 外形の縁だけ短く光らせ、形が受け渡されたことを見せる
+    float edge = abs(sa - sb) * sin(t * 3.14159);
+    o.rgb += edge * 0.12;
   }
 }`;
 
@@ -1349,6 +1407,27 @@ function surfaceAt(slide, p) {
   return { kind, amount: Math.min(2, Math.max(0, base * wobble)), scale: 1, angle };
 }
 
+// 接続技法(track-matte / radial-wipe / silhouette-match)のパラメータ。
+// 技法ごとに意味が変わるので、詰め方はシェーダー側のコメントと対にしてある。
+function connectParams(technique, params = {}) {
+  if (technique === "track-matte") {
+    return [params.invert ? 1 : 0, Math.min(0.4, Math.max(0.01, numParam(params.feather, 0.08))), 0, 0];
+  }
+  if (technique === "radial-wipe") {
+    const center = Array.isArray(params.center) ? params.center : [0.5, 0.5];
+    return [
+      params.direction === "ccw" ? 1 : 0,
+      (numParam(params.startAngle, 0) * Math.PI) / 180,
+      Math.min(1, Math.max(0, numParam(center[0], 0.5))),
+      Math.min(1, Math.max(0, numParam(center[1], 0.5))),
+    ];
+  }
+  if (technique === "silhouette-match") {
+    return [0, Math.min(0.95, Math.max(0.05, numParam(params.threshold, 0.45))), 0, 0];
+  }
+  return [0, 0, 0, 0];
+}
+
 function seqAt(elapsed, n, holdMs, transMs, zoomOn) {
   let cursor = 0;
   const still = { x: 0, y: 0, scale: 1, amount: 0, tech: 0 };
@@ -1367,9 +1446,14 @@ function seqAt(elapsed, n, holdMs, transMs, zoomOn) {
       // 転換中は、前カットは動き切った状態、次カットは動き始めを見せる
       const ma = motionAt(slides[i], i, 1, zoomOn);
       const mb = motionAt(slides[i + 1], i + 1, t, zoomOn);
+      // つなぎはカットごとに違ってよい。指定が無ければUIの選択に従う
+      const out = slides[i].transitionOut;
+      const modeIdx = out ? TRANSITION_TECHNIQUES.indexOf(out.technique) : -1;
       return {
         a: i, b: i + 1, t, motA: ma, motB: mb,
         surfA: surfaceAt(slides[i], 1), surfB: surfaceAt(slides[i + 1], t),
+        mode: modeIdx >= 0 ? modeIdx : seqState.mode,
+        connect: modeIdx >= 0 ? connectParams(out.technique, out.params) : [0, 0, 0, 0],
         zoomA: ma.scale, zoomB: mb.scale, localA: dur, localB: t * transMs,
       };
     }
@@ -1522,13 +1606,13 @@ async function ensureEditorBase(source) {
   await loadBlob(await canvasBlob(c, "image/png"));
 }
 
-async function addSlideBitmap(bmp, recipe = null, sourceBlob = null, assetId = createAssetId(), motion = null, surface = []) {
+async function addSlideBitmap(bmp, recipe = null, sourceBlob = null, assetId = createAssetId(), motion = null, surface = [], transitionOut = null) {
   if (slides.length >= MAX_SLIDES) {
     transNote.textContent = `カットは最大${MAX_SLIDES}枚までです。`;
     return;
   }
   await ensureEditorBase(bmp);
-  const s = { kind: "image", assetId, bmp, sourceBlob: sourceBlob || await bitmapBlob(bmp), tex: makeTex(), thumb: null, recipe, override: null, textTex: null, motion, surface };
+  const s = { kind: "image", assetId, bmp, sourceBlob: sourceBlob || await bitmapBlob(bmp), tex: makeTex(), thumb: null, recipe, override: null, textTex: null, motion, surface, transitionOut };
   uploadSlide(s);
   buildSlideOverride(s);
   const tc = document.createElement("canvas");
@@ -1585,6 +1669,7 @@ async function addSlideVideo(blob, saved = {}) {
     duration, trimStart, trimEnd, tex: makeTex(), thumb: tc.toDataURL(), recipe: saved.recipe || null,
     override: null, textTex: null, mediaCanvas: null, motion: saved.motion || null,
     surface: saved.surface || [],
+    transitionOut: saved.transitionOut || null,
   };
   uploadSlide(s);
   buildSlideOverride(s);
@@ -1643,7 +1728,14 @@ clipTrimEnd.addEventListener("change", applyTrimInputs);
 // ---- ローカルプロジェクト（素材Blob + 編集内容をIndexedDBへ保存）
 const projectNote = document.getElementById("project-note");
 const PROJECT_DB = "noiz-lab-projects";
-const TRANSITION_TECHNIQUES = ["fade", "wipe", "dissolve", "glitch", "punch", "flash", "push", "film-burn"];
+// 添字がシェーダーの u_mode。8以降はモーション文法の接続技法で、
+// UIのボタン(0-7)には出さずProject JSON経由でのみ指定する。
+// UIのボタンに出す数。これ以降はProject JSON経由でのみ指定する
+const UI_TRANSITION_COUNT = 8;
+const TRANSITION_TECHNIQUES = [
+  "fade", "wipe", "dissolve", "glitch", "punch", "flash", "push", "film-burn",
+  "track-matte", "radial-wipe", "silhouette-match",
+];
 let activeProject = createProject();
 
 function projectRatioName() {
@@ -1685,11 +1777,14 @@ function buildProjectManifest(sourceKind = "indexeddb") {
   let cursor = 0;
   const visualClips = slides.map((s, i) => {
     const duration = slideDurationMs(s) / 1000;
-    const transition = i < slides.length - 1 ? {
-      technique: TRANSITION_TECHNIQUES[seqState.mode] || "fade",
-      duration: seqState.trans,
-      params: {},
-    } : null;
+    // カットごとの指定があればそれを残す。無ければUIの一括選択を書く
+    const transition = i < slides.length - 1
+      ? (s.transitionOut || {
+          technique: TRANSITION_TECHNIQUES[seqState.mode] || "fade",
+          duration: seqState.trans,
+          params: {},
+        })
+      : null;
     const clip = {
       id: s.clipId ||= createClipId(), assetId: s.assetId, purpose: "unspecified",
       start: cursor, duration,
@@ -1865,7 +1960,10 @@ async function restoreProject(manifest, storedBlobs = {}) {
     seed: manifest.editor.recipe.seed, t: manifest.editor.recipe.text,
   });
   const firstTransition = visual.clips.find((clip) => clip.transitionOut)?.transitionOut;
-  seqState.mode = Math.max(0, TRANSITION_TECHNIQUES.indexOf(firstTransition?.technique || "fade"));
+  // UIのボタンは0-7のみ。JSON専用の接続技法(8-)が来た場合、一括選択は既定へ倒す
+  // （カットごとの指定は slide.transitionOut に残るので描画には効く）
+  const firstIdx = TRANSITION_TECHNIQUES.indexOf(firstTransition?.technique || "fade");
+  seqState.mode = firstIdx >= 0 && firstIdx < UI_TRANSITION_COUNT ? firstIdx : 0;
   seqState.trans = firstTransition?.duration ?? 0.6;
   seqState.zoom = visual.clips.some((clip) => clip.motion?.length);
   seqState.percut = manifest.editor?.perCutEffects ?? visual.clips.some((clip) => !!clip.recipe);
@@ -1880,11 +1978,13 @@ async function restoreProject(manifest, storedBlobs = {}) {
     const motion = clip.motion?.find((m) => m.role === "primary") || clip.motion?.[0] || null;
     // 表面表現(texture)はカメラの動きと重ねられる。文法上0〜2つまで
     const surface = (clip.motion || []).filter((m) => m.role === "texture" && m !== motion).slice(0, 2);
+    // つなぎはカットごとに保持する。UIの一括選択は指定が無いカットの既定値
+    const transitionOut = clip.transitionOut || null;
     if (asset.type === "video") {
-      await addSlideVideo(blob, { assetId: asset.id, name: asset.name, recipe: clip.recipe, trimStart: clip.trim.in, trimEnd: clip.trim.out, motion, surface });
+      await addSlideVideo(blob, { assetId: asset.id, name: asset.name, recipe: clip.recipe, trimStart: clip.trim.in, trimEnd: clip.trim.out, motion, surface, transitionOut });
       slides.at(-1).clipId = clip.id;
     } else {
-      await addSlideBitmap(await createImageBitmap(blob), clip.recipe, blob, asset.id, motion, surface);
+      await addSlideBitmap(await createImageBitmap(blob), clip.recipe, blob, asset.id, motion, surface, transitionOut);
       slides.at(-1).clipId = clip.id;
     }
   }
@@ -2413,7 +2513,7 @@ async function exportGif() {
       seqFrame = {
         texA: slides[s.a].tex, texB: slides[s.b].tex,
         t: s.t, zoomA: s.zoomA, zoomB: s.zoomB, motA: s.motA, motB: s.motB,
-        surfA: s.surfA, surfB: s.surfB,
+        surfA: s.surfA, surfB: s.surfB, mode: s.mode, connect: s.connect,
       };
       seqOverride = overrideFor(s.a, s.b, s.t);
       render(tMs / 1000); // 仮想時刻。ウィンドウが隠れていても進む
@@ -3001,7 +3101,9 @@ function render(time) {
     gl.uniform1i(tu.u_a, 0);
     gl.uniform1i(tu.u_b, 1);
     gl.uniform1f(tu.u_t, seqFrame.t);
-    gl.uniform1i(tu.u_mode, seqState.mode);
+    gl.uniform1i(tu.u_mode, seqFrame.mode ?? seqState.mode);
+    const cn = seqFrame.connect || [0, 0, 0, 0];
+    gl.uniform4f(tu.u_connect, cn[0], cn[1], cn[2], cn[3]);
     gl.uniform2f(tu.u_res, W, H);
     gl.uniform1f(tu.u_seed2, sd);
     const mA = seqFrame.motA || { x: 0, y: 0, scale: seqFrame.zoomA, amount: 0, tech: 0 };
@@ -3102,6 +3204,8 @@ function frame() {
       motB: s.motB,
       surfA: s.surfA,
       surfB: s.surfB,
+      mode: s.mode,
+      connect: s.connect,
     };
     seqOverride = overrideFor(s.a, s.b, s.t);
     dirty = true;
@@ -3131,6 +3235,8 @@ function frame() {
         motB: s.motB,
         surfA: s.surfA,
         surfB: s.surfB,
+        mode: s.mode,
+        connect: s.connect,
       };
       seqOverride = overrideFor(s.a, s.b, s.t);
       dirty = true;

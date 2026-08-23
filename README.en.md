@@ -181,6 +181,11 @@ a deployed NOIZ LAB instance, and its `/api/storyboard` writes one. A storyboard
 a purpose, duration, shot, caption, image prompt, motion and transition per cut; hand it
 to `build_short_video` and that pacing lands on the timeline as written.
 
+The renderer draws the camera techniques from
+[Motion Grammar](docs/motion-grammar.md) — `orthographic-pullback`, `constant-linear`,
+`frame-echo`, `modular-grid` and `ken-burns`. Any other technique is kept verbatim in the
+project file and only *drawn* as a fallback, so a future renderer can honour it properly.
+
 Pass the `project` from each result straight into the next tool:
 
 ```text

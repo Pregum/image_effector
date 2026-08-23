@@ -14,7 +14,7 @@ import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { callTool } from "../mcp/server.mjs";
 import {
-  ToolError, applyStyleBible, buildShortVideo, createProjectFromBrief,
+  CONSTANTS, ToolError, applyStyleBible, buildShortVideo, createProjectFromBrief,
   generateMissingAssets, generateStoryboard, renderProject, reviewHookAndPacing,
 } from "../mcp/tools.mjs";
 
@@ -492,7 +492,10 @@ assert.equal(boardBuilt.summary.hold, null, "a per-cut storyboard has no single 
 assert.ok(new Set(boardClips.map((c) => c.duration)).size > 1, "storyboard pacing must not be flattened");
 assert.equal(boardClips[0].duration, boardOnly.storyboard.cuts[0].duration);
 assert.deepEqual(boardClips.map((c) => c.purpose), ["hook", "demonstrate", "cta"]);
-assert.equal(boardClips[0].motion[0].id, "frame-echo", "storyboard motion is carried onto the clip");
+// The format calls this field "technique" (transitionOut does too). Writing
+// anything else means every reader silently ignores the motion.
+assert.equal(boardClips[0].motion[0].technique, "frame-echo", "storyboard motion is carried onto the clip");
+assert.equal(boardClips[0].motion[0].id, undefined, "the legacy 'id' key must not be emitted");
 assert.equal(boardClips[0].transitionOut.technique, "glitch");
 assert.equal(boardClips.at(-1).transitionOut, null);
 assert.equal(boardClips[0].recipe.preset, "NEON");
@@ -565,22 +568,31 @@ await assert.rejects(
   "missing files are caught before launching Chrome",
 );
 
-// The CLI concatenates pairwise clips, so a clip runs 2*hold + transition and
-// every interior cut is drawn twice. renderProject must solve for the hold that
-// lands on the timeline duration rather than passing the per-cut duration
-// through, which would render roughly twice as long as intended.
+// The CLI concatenates pairwise clips, so every interior cut is drawn twice and
+// --hold is a per-cut dwell rather than the clip length. renderProject aims each
+// pair at its share of the timeline instead of passing the per-cut duration
+// straight through, which would render roughly twice as long as intended.
+//
+// It deliberately does NOT predict the output length: the export is a real-time
+// MediaRecorder capture of the browser's playback, so the same inputs measured
+// 2.88s / 3.70s / 4.01s on one machine. renderProject probes the finished file
+// instead — see actualDuration.
 {
   const clipsToRender = built.project.timeline.tracks[0].clips;
   const timeline = clipsToRender.reduce((sum, c) => sum + c.duration, 0);
   const pairs = clipsToRender.length - 1;
   const td = clipsToRender[0].transitionOut.duration;
   const hold = Math.min(3, Math.max(0.3, Number(((timeline / pairs - td) / 2).toFixed(3))));
-  const predicted = Number((pairs * (2 * hold + td)).toFixed(3));
-  assert.ok(
-    Math.abs(predicted - timeline) < 0.05,
-    `an achievable timeline must render at its own length: ${predicted} vs ${timeline}`,
-  );
   assert.ok(hold < timeline / clipsToRender.length, "hold must be shorter than the per-cut duration");
+  assert.ok(hold >= 0.3 && hold <= 3, "hold must stay inside the CLI's accepted range");
+}
+
+// A duration figure must never be computed from the timeline and presented as
+// what the file will be; only a measurement of the real file is honest here.
+{
+  const toolsSource = await readFile(join(ROOT, "mcp/tools.mjs"), "utf8");
+  assert.ok(!/predictedDuration/.test(toolsSource), "renderProject must not report a predicted duration");
+  assert.match(toolsSource, /actualDuration/, "renderProject must report the measured duration");
 }
 
 // --- Web app round trip -----------------------------------------------------
@@ -679,6 +691,82 @@ async function webAppWouldOpen(manifest) {
   assert.deepEqual(await readFile(extracted.project.assets[0].source.ref), await readFile(frames[0]));
   // The unpacked project is renderable again: the full loop closes.
   assert.deepEqual(validateProject(extracted.project), { valid: true, errors: [] });
+}
+
+// --- motion grammar ---------------------------------------------------------
+
+// The app reads clip.motion[].technique (transitionOut uses "technique" too).
+// Emitting any other key means the app silently ignores the motion and falls
+// back to Ken Burns, which is what used to happen with the old "id" key.
+{
+  const appSource = await readFile(join(ROOT, "public/app.js"), "utf8");
+
+  // The app's own per-clip motion selection, lifted rather than paraphrased.
+  const pickLine = appSource.match(/const motion = clip\.motion\?\.find\([^;]+;/)?.[0];
+  assert.ok(pickLine, "could not find the motion selection in public/app.js");
+  const pickMotion = new Function("clip", `${pickLine} return motion;`);
+
+  const board = {
+    cuts: [
+      { purpose: "hook", duration: 3, motion: "orthographic-pullback", transitionOut: "fade", imagePrompt: "a" },
+      { purpose: "explain", duration: 3, motion: "constant-linear", transitionOut: "dissolve", imagePrompt: "b" },
+      { purpose: "demonstrate", duration: 3, motion: "frame-echo", transitionOut: "glitch", imagePrompt: "c" },
+      { purpose: "cta", duration: 3, motion: "modular-grid", transitionOut: null, imagePrompt: "d" },
+    ],
+  };
+  const sb = await generateStoryboard({
+    project: createProjectFromBrief({ objective: "motion", duration: 12 }).project,
+    storyboard: board,
+    duration: 12,
+  });
+  const withMotion = buildShortVideo({
+    project: sb.project,
+    assets: frames.map((path) => ({ path })),
+    storyboard: sb.storyboard,
+    duration: 12,
+  });
+  const motionClips = withMotion.project.timeline.tracks[0].clips;
+  assert.deepEqual(
+    motionClips.map((c) => c.motion[0].technique),
+    ["orthographic-pullback", "constant-linear", "frame-echo", "modular-grid"],
+    "each cut keeps the technique the storyboard asked for",
+  );
+  // ...and the app resolves every one of them, rather than dropping to a default.
+  assert.deepEqual(
+    motionClips.map((c) => pickMotion(c)?.technique),
+    ["orthographic-pullback", "constant-linear", "frame-echo", "modular-grid"],
+    "the Web app must resolve each clip's motion",
+  );
+  assert.deepEqual(validateProject(withMotion.project), { valid: true, errors: [] });
+
+  // A technique the renderer does not implement must still survive in the file,
+  // so a future renderer can honour it (the app falls back for drawing only).
+  const exotic = structuredClone(withMotion.project);
+  exotic.timeline.tracks[0].clips[0].motion = [{ technique: "shape-morph", role: "primary", params: { easing: "ease" } }];
+  assert.deepEqual(validateProject(exotic), { valid: true, errors: [] });
+  assert.equal(pickMotion(exotic.timeline.tracks[0].clips[0]).technique, "shape-morph");
+
+  // The validator rejects a motion entry with no technique, which is what let
+  // the id/technique mismatch go unnoticed before.
+  const badMotion = structuredClone(withMotion.project);
+  badMotion.timeline.tracks[0].clips[0].motion = [{ id: "frame-echo", role: "primary" }];
+  const badResult = validateProject(badMotion);
+  assert.equal(badResult.valid, false, "a motion entry without technique must be rejected");
+  assert.match(badResult.errors.join("\n"), /motion\[0\]\.technique is required/);
+
+  // The renderer's technique table and the MCP vocabulary must not drift: every
+  // implemented technique has to be one the storyboard is allowed to request.
+  const codeMap = appSource.match(/const MOTION_TECH_CODE = \{([^}]*)\}/)?.[1];
+  assert.ok(codeMap, "could not find MOTION_TECH_CODE in public/app.js");
+  const implemented = [...codeMap.matchAll(/"([a-z-]+)":/g)].map((m) => m[1]);
+  assert.ok(implemented.length >= 5, `expected the camera techniques, got ${implemented.join(",")}`);
+  for (const technique of implemented) {
+    if (technique === "ken-burns") continue; // the app's own default, not a grammar id
+    assert.ok(
+      CONSTANTS.MOTIONS.includes(technique),
+      `${technique} is rendered but generate_storyboard cannot request it`,
+    );
+  }
 }
 
 // --- JSON-RPC over stdio ----------------------------------------------------

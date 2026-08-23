@@ -135,3 +135,21 @@ AIはムード名だけで技法を決めず、カットの目的を先に分類
 6. 字幕セーフエリア、点滅、同時モーション数を検証する
 
 レンダラー未対応の技法は、Storyboard JSONへ保持したまま近い表現へフォールバックします。これにより、Web版で作ったプロジェクトを将来のDesktopレンダラーや動画生成モデルで高品質に再レンダリングできます。
+
+## 実装状況
+
+カットは `motion[]` を持ち、各要素は `{ technique, role, params }` です。`technique` が技法IDで、この名前は `transitionOut.technique` と揃えてあります。
+
+Web版のレンダラー（`public/app.js`）が実際に描けるのは、静止画1枚から作れるカメラ系の技法です。
+
+| 技法 | 描画 | 主に効くパラメータ |
+|---|---|---|
+| `orthographic-pullback` | 寄りから等倍へ引く | `fromScale`, `toScale` |
+| `constant-linear` | 加減速なしの平行移動 | `velocity`, `axis`, `reverse` |
+| `frame-echo` | 進行方向へ減衰させた残像を重ねる | `copies`, `offset` |
+| `modular-grid` | セルごとに位相をずらし、拍で秩序へ戻す | `sequence` |
+| `ken-burns` | 寄り／引き（Web版の既定） | `direction`, `amount` |
+
+上記以外の技法を指定しても**エラーにはならず、JSONにはその技法名が残ります**。描画だけが `ken-burns` へフォールバックする形なので、Desktopレンダラーや動画生成モデルへ差し替えたときに本来の表現で再レンダリングできます。
+
+複数の`motion`を持つカットでは、`role` が `primary` のものが動きの主役として使われます（未指定なら先頭）。

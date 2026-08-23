@@ -436,7 +436,7 @@ export function buildShortVideo(args = {}) {
     // grammar IDs come from docs/motion-grammar.md.
     const motionId = board?.motion ?? (i % 2 === 0 ? "orthographic-pullback" : "constant-linear");
     const motion = [{
-      id: motionId,
+      technique: motionId,
       role: "primary",
       params: motionId === "orthographic-pullback"
         ? { fromScale: 1.08, toScale: 1, parallax: 0.2 }
@@ -804,6 +804,20 @@ async function materializeAssets(project, outDir) {
   return { project, materialized: written };
 }
 
+/** Read a rendered file's real duration. ffprobe ships with the required ffmpeg. */
+async function probeDuration(file) {
+  try {
+    const { stdout } = await run("ffprobe", [
+      "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", file,
+    ], { timeout: 30_000 });
+    const seconds = Number(stdout.trim());
+    return Number.isFinite(seconds) && seconds > 0 ? round(seconds) : null;
+  } catch {
+    // Not worth failing a successful render over; the caller still gets the file.
+    return null;
+  }
+}
+
 function run(command, cliArgs, { timeout = 600_000 } = {}) {
   return new Promise((ok, failRun) => {
     const child = spawn(command, cliArgs, { cwd: ROOT, stdio: ["ignore", "pipe", "pipe"] });
@@ -856,15 +870,11 @@ export async function renderProject(args = {}) {
   const transitionDuration = clamp(round(clips[0].transitionOut?.duration ?? 0.9), 0.2, 2);
 
   // The CLI renders pairwise clips (cut1→cut2, cut2→cut3, ...) and concatenates
-  // them, so every interior cut is drawn twice and one clip runs
-  // 2*hold + transitionDuration. Solve for the hold that makes the concatenated
-  // result match the timeline instead of passing the per-cut duration straight
-  // through, which would render roughly twice as long as intended.
+  // them, so every interior cut is drawn twice: --hold is a per-cut dwell, not
+  // the clip length. Aim each pair at its share of the timeline.
   const timelineDuration = clips.reduce((sum, c) => sum + c.duration, 0);
   const pairs = clips.length - 1;
-  const idealHold = (timelineDuration / pairs - transitionDuration) / 2;
-  const hold = clamp(round(idealHold), 0.3, 3);
-  const predictedDuration = round(pairs * (2 * hold + transitionDuration));
+  const hold = clamp(round((timelineDuration / pairs - transitionDuration) / 2), 0.3, 3);
 
   await mkdir(dirname(output), { recursive: true });
   const cliArgs = [
@@ -876,6 +886,7 @@ export async function renderProject(args = {}) {
   if (transitions.length) cliArgs.push("--transitions", [...new Set(transitions)].join(","));
 
   const { stdout } = await run(process.execPath, cliArgs, { timeout: requireNumber(args.timeoutMs, "timeoutMs", { min: 10_000, max: 1_800_000, fallback: 900_000 }) });
+  const actualDuration = await probeDuration(output);
   return {
     output,
     cuts: cuts.length,
@@ -883,11 +894,15 @@ export async function renderProject(args = {}) {
     transitions,
     timelineDuration: round(timelineDuration),
     ...(materialized ? { materializedAssets: materialized } : {}),
-    // The real file runs a little longer: each concatenated clip carries about
-    // 0.3s of encoder overhead, so expect roughly +0.3s per cut boundary.
-    predictedDuration,
-    ...(Math.abs(predictedDuration - timelineDuration) > 0.5 ? {
-      note: `1カットの保持時間が範囲外のため、書き出しは約${predictedDuration}秒になります（タイムラインは${round(timelineDuration)}秒）。`,
+    // Measured, not predicted. The export records the browser's live playback
+    // through MediaRecorder, so the file's length depends on how fast the
+    // machine actually renders: identical inputs measured 2.88s / 3.70s / 4.01s
+    // on the same machine. Any figure computed from the timeline would be a
+    // guess, so report what the file really is and say it varies.
+    actualDuration,
+    ...(actualDuration && Math.abs(actualDuration - timelineDuration) > timelineDuration * 0.1 ? {
+      note: `書き出しは${actualDuration}秒で、タイムラインの${round(timelineDuration)}秒と差があります。`
+        + " 書き出しは実時間の画面収録なので、描画が間に合わないと尺が縮みます（同じ入力でも実行ごとに変わります）。",
     } : {}),
     log: stdout.trim().split("\n").slice(-5).join("\n"),
   };

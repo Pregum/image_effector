@@ -147,7 +147,20 @@
           "additionalProperties": false
         },
         "recipe": { "type": ["object", "null"] },
-        "motion": { "type": "array", "items": { "type": "object" } },
+        "motion": {
+          "type": "array",
+          "maxItems": 6,
+          "items": {
+            "type": "object",
+            "required": ["technique"],
+            "properties": {
+              "technique": { "type": "string", "maxLength": 80, "description": "docs/motion-grammar.md の技法ID" },
+              "role": { "enum": ["primary", "bridge", "secondary", "texture", "accent"] },
+              "params": { "type": "object" }
+            },
+            "additionalProperties": false
+          }
+        },
         "transitionOut": {
           "type": ["object", "null"],
           "properties": {

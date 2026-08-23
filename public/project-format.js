@@ -77,6 +77,14 @@ export function validateProject(project) {
       if (!(clip?.duration > 0)) errors.push(`${path}.duration must be > 0`);
       if (!obj(clip?.trim) || !(clip.trim.in >= 0) || !(clip.trim.out >= clip.trim.in)) errors.push(`${path}.trim is invalid`);
       if (!Array.isArray(clip?.motion)) errors.push(`${path}.motion must be an array`);
+      else for (const [mi, motion] of clip.motion.entries()) {
+        // technique is the field name used throughout the format (transitionOut
+        // uses it too). Enforcing it here stops a writer emitting some other key
+        // and having its motion silently ignored by every reader.
+        if (!obj(motion) || typeof motion.technique !== "string" || !motion.technique) {
+          errors.push(`${path}.motion[${mi}].technique is required`);
+        }
+      }
     }
   }
   return { valid: errors.length === 0, errors };

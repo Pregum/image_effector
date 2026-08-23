@@ -63,12 +63,42 @@ uniform float u_t;     // 0=A → 1=B
 uniform int u_mode;    // 0:fade 1:wipe 2:dissolve 3:glitch 4:punch 5:flash 6:push 7:film burn
 uniform vec2 u_res;
 uniform float u_seed2;
-uniform float u_zoomA; // Ken Burnsズーム倍率（1で等倍）
-uniform float u_zoomB;
+// カット内の動き（モーション文法）。xy=平行移動, z=拡大, w=技法ごとの強度。
+// docs/motion-grammar.md の技法IDを u_techA/u_techB の番号へ対応させている。
+uniform vec4 u_motA;   // xy:offset z:scale w:amount
+uniform vec4 u_motB;
+uniform int u_techA;   // 0:none/ken-burns 1:frame-echo 2:modular-grid
+uniform int u_techB;
 float th(float n) { return fract(sin(n * 127.1 + u_seed2 * 311.7) * 43758.5453); }
 float th2(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7)) + u_seed2 * 17.0) * 43758.5453); }
-vec4 sA(vec2 p) { return texture(u_a, clamp(0.5 + (p - 0.5) / u_zoomA, 0.0, 1.0)); }
-vec4 sB(vec2 p) { return texture(u_b, clamp(0.5 + (p - 0.5) / u_zoomB, 0.0, 1.0)); }
+// 1カット分の画をモーション付きで取り出す。平行移動と拡大は全技法共通で、
+// 技法ごとの効果はその上に重ねる。
+vec4 motionSample(sampler2D tex, vec2 p, vec4 mot, int tech) {
+  vec2 uv = clamp(0.5 + (p - 0.5) / mot.z - mot.xy, 0.0, 1.0);
+  if (tech == 1) {
+    // frame-echo: 残像。過去フレーム相当を進行方向へずらして減衰合成する
+    vec4 c = texture(tex, uv);
+    float decay = 0.55;
+    for (int k = 1; k <= 3; k++) {
+      float f = float(k);
+      vec2 off = mot.xy * 0.35 * f + vec2(0.004 * f, 0.0);
+      vec4 e = texture(tex, clamp(uv + off, 0.0, 1.0));
+      c = mix(c, max(c, e), mot.w * decay / f);
+    }
+    return c;
+  }
+  if (tech == 2) {
+    // modular-grid: セルごとに位相をずらして動かす。整列は保ったまま情報量を上げる
+    vec2 cells = vec2(6.0, 8.0);
+    vec2 cell = floor(uv * cells);
+    float phase = fract(sin(dot(cell, vec2(12.9898, 78.233))) * 43758.5453);
+    vec2 jitter = vec2(sin((phase + mot.w) * 6.28318), cos((phase + mot.w) * 6.28318)) * 0.012 * mot.w;
+    return texture(tex, clamp(uv + jitter, 0.0, 1.0));
+  }
+  return texture(tex, uv);
+}
+vec4 sA(vec2 p) { return motionSample(u_a, p, u_motA, u_techA); }
+vec4 sB(vec2 p) { return motionSample(u_b, p, u_motB, u_techB); }
 void main() {
   vec2 uv = v_uv;
   float t = clamp(u_t, 0.0, 1.0);
@@ -99,10 +129,10 @@ void main() {
   } else if (u_mode == 4) {
     // パンチズーム: Aへ寄りながらBが奥から定位置へ着地
     float e = smoothstep(0.18, 0.82, t);
-    float za = u_zoomA * (1.0 + 0.42 * t);
-    float zb = u_zoomB * mix(0.70, 1.0, smoothstep(0.0, 0.9, t));
-    vec2 auv = clamp(0.5 + (uv - 0.5) / za, 0.0, 1.0);
-    vec2 buv = clamp(0.5 + (uv - 0.5) / zb, 0.0, 1.0);
+    float za = u_motA.z * (1.0 + 0.42 * t);
+    float zb = u_motB.z * mix(0.70, 1.0, smoothstep(0.0, 0.9, t));
+    vec2 auv = clamp(0.5 + (uv - 0.5) / za - u_motA.xy, 0.0, 1.0);
+    vec2 buv = clamp(0.5 + (uv - 0.5) / zb - u_motB.xy, 0.0, 1.0);
     vec4 ca = texture(u_a, auv);
     vec4 cb = texture(u_b, buv);
     float radial = (1.0 - smoothstep(0.05, 0.76, length(uv - 0.5))) * sin(t * 3.14159) * 0.12;
@@ -1176,25 +1206,86 @@ function slideDurationMs(s, imageHoldMs = seqState.hold * 1000) {
     : imageHoldMs;
 }
 
+// モーション文法（docs/motion-grammar.md）のうち、静止画1枚から作れるカメラ系。
+// シェーダーの u_tech* に渡す番号と対応する。ここに無い技法は ken-burns へ
+// フォールバックし、Project JSONには元の技法名が残るので将来差し替えられる。
+const MOTION_TECH_CODE = { "ken-burns": 0, "orthographic-pullback": 0, "constant-linear": 0, "frame-echo": 1, "modular-grid": 2 };
+
+// カット内の進行度pから、平行移動・拡大・技法強度を作る。
+// 返す形は {x, y, scale, amount, tech} で、そのまま u_mot*/u_tech* になる。
+function motionAt(slide, index, p, zoomOn) {
+  const spec = slide?.motion;
+  const technique = spec?.technique || (zoomOn ? "ken-burns" : "none");
+  const params = spec?.params || {};
+  const tech = MOTION_TECH_CODE[technique] ?? 0;
+  const ease = p * p * (3 - 2 * p); // smoothstep: 等速だと機械的に見える
+
+  switch (technique) {
+    case "orthographic-pullback": {
+      // 平面的な構図から引いて周囲を開示する。寄りから始めて等倍へ戻す
+      const from = Number(params.fromScale) || 1.12;
+      const to = Number(params.toScale) || 1;
+      return { x: 0, y: 0, scale: from + (to - from) * ease, amount: 0, tech };
+    }
+    case "constant-linear": {
+      // 加減速しない一定速度の移動。引っかかりが出るのでeaseは使わない
+      const v = Number(params.velocity) || 0.02;
+      const along = params.axis === "x" ? [1, 0] : [0, 1];
+      const dir = params.reverse ? -1 : 1;
+      // 端が見えないよう、動く分だけ寄せておく
+      const scale = 1 + Math.abs(v) * 2;
+      return { x: along[0] * v * p * dir, y: along[1] * v * p * dir, scale, amount: 0, tech };
+    }
+    case "frame-echo": {
+      // 残像。動きがないと残像も出ないので、わずかに流しながら重ねる
+      const copies = Math.min(3, Math.max(1, Number(params.copies) || 3));
+      const drift = Number(params.offset) || 0.012;
+      return { x: drift * p, y: 0, scale: 1.06, amount: (copies / 3) * Math.sin(p * Math.PI), tech };
+    }
+    case "modular-grid": {
+      // グリッド運動。セルの揺れは拍ごとに秩序へ戻す（controlled-chaosと同じ
+      // 考えで、視聴者が戻れる基準を残す）。ただし揺れだけだとカットの最初と
+      // 最後が同じ画になり静止して見えるので、全体をゆっくり寄せて差をつける。
+      const seq = Number(params.sequence) || 2;
+      const pulse = Math.abs(Math.sin(p * Math.PI * seq));
+      // 拍の谷でも完全には止めない
+      return { x: 0, y: 0, scale: 1.02 + 0.05 * p, amount: 0.25 + 0.75 * pulse, tech };
+    }
+    case "none":
+      return { x: 0, y: 0, scale: 1, amount: 0, tech: 0 };
+    default: {
+      // ken-burns と未実装の技法。従来どおり寄り／引きを交互に当てる
+      const amount = Number(params.amount) || 0.08;
+      const out = params.direction ? params.direction === "out" : index % 2 === 1;
+      const scale = out ? 1 + amount - amount * p : 1 + amount * p;
+      return { x: 0, y: 0, scale, amount: 0, tech: 0 };
+    }
+  }
+}
+
 function seqAt(elapsed, n, holdMs, transMs, zoomOn) {
   let cursor = 0;
+  const still = { x: 0, y: 0, scale: 1, amount: 0, tech: 0 };
   for (let i = 0; i < n; i++) {
     const dur = slideDurationMs(slides[i], holdMs);
     const local = elapsed - cursor;
-    const zoom = (k, p) => !zoomOn ? 1 : k % 2 === 0 ? 1 + 0.08 * p : 1.08 - 0.08 * p;
     if (local <= dur || i === n - 1) {
       const p = Math.min(1, Math.max(0, local / Math.max(1, dur)));
-      return { a: i, b: i, t: 0, zoomA: zoom(i, p), zoomB: zoom(i, p), localA: Math.max(0, local), localB: 0 };
+      const m = motionAt(slides[i], i, p, zoomOn);
+      return { a: i, b: i, t: 0, motA: m, motB: m, zoomA: m.scale, zoomB: m.scale, localA: Math.max(0, local), localB: 0 };
     }
     cursor += dur;
     if (i < n - 1 && elapsed <= cursor + transMs) {
       const t = Math.min(1, Math.max(0, (elapsed - cursor) / Math.max(1, transMs)));
-      return { a: i, b: i + 1, t, zoomA: zoom(i, 1), zoomB: zoom(i + 1, t), localA: dur, localB: t * transMs };
+      // 転換中は、前カットは動き切った状態、次カットは動き始めを見せる
+      const ma = motionAt(slides[i], i, 1, zoomOn);
+      const mb = motionAt(slides[i + 1], i + 1, t, zoomOn);
+      return { a: i, b: i + 1, t, motA: ma, motB: mb, zoomA: ma.scale, zoomB: mb.scale, localA: dur, localB: t * transMs };
     }
     cursor += transMs;
   }
   const last = n - 1;
-  return { a: last, b: last, t: 0, zoomA: 1, zoomB: 1, localA: slideDurationMs(slides[last], holdMs), localB: 0 };
+  return { a: last, b: last, t: 0, motA: still, motB: still, zoomA: 1, zoomB: 1, localA: slideDurationMs(slides[last], holdMs), localB: 0 };
 }
 
 function uploadSlide(s) {
@@ -1339,13 +1430,13 @@ async function ensureEditorBase(source) {
   await loadBlob(await canvasBlob(c, "image/png"));
 }
 
-async function addSlideBitmap(bmp, recipe = null, sourceBlob = null, assetId = createAssetId()) {
+async function addSlideBitmap(bmp, recipe = null, sourceBlob = null, assetId = createAssetId(), motion = null) {
   if (slides.length >= MAX_SLIDES) {
     transNote.textContent = `カットは最大${MAX_SLIDES}枚までです。`;
     return;
   }
   await ensureEditorBase(bmp);
-  const s = { kind: "image", assetId, bmp, sourceBlob: sourceBlob || await bitmapBlob(bmp), tex: makeTex(), thumb: null, recipe, override: null, textTex: null };
+  const s = { kind: "image", assetId, bmp, sourceBlob: sourceBlob || await bitmapBlob(bmp), tex: makeTex(), thumb: null, recipe, override: null, textTex: null, motion };
   uploadSlide(s);
   buildSlideOverride(s);
   const tc = document.createElement("canvas");
@@ -1400,7 +1491,7 @@ async function addSlideVideo(blob, saved = {}) {
   const s = {
     kind: "video", assetId: saved.assetId || createAssetId(), video, objectUrl, sourceBlob: blob, name: saved.name || blob.name || "video",
     duration, trimStart, trimEnd, tex: makeTex(), thumb: tc.toDataURL(), recipe: saved.recipe || null,
-    override: null, textTex: null, mediaCanvas: null,
+    override: null, textTex: null, mediaCanvas: null, motion: saved.motion || null,
   };
   uploadSlide(s);
   buildSlideOverride(s);
@@ -1511,7 +1602,11 @@ function buildProjectManifest(sourceKind = "indexeddb") {
       start: cursor, duration,
       trim: { in: s.kind === "video" ? s.trimStart : 0, out: s.kind === "video" ? s.trimEnd : duration },
       recipe: s.recipe || null,
-      motion: seqState.zoom ? [{ technique: "ken-burns", role: "primary", params: { direction: i % 2 ? "out" : "in", amount: 0.08 } }] : [],
+      // MCPなどが指定した技法は保持したまま書き戻す。指定が無いカットだけ
+      // 従来どおりKen Burnsを当てる（zoomのチェックが入っているとき）
+      motion: s.motion
+        ? [{ technique: s.motion.technique, role: s.motion.role || "primary", params: s.motion.params || {} }]
+        : seqState.zoom ? [{ technique: "ken-burns", role: "primary", params: { direction: i % 2 ? "out" : "in", amount: 0.08 } }] : [],
       transitionOut: transition,
     };
     cursor += duration + (transition?.duration || 0);
@@ -1676,7 +1771,7 @@ async function restoreProject(manifest, storedBlobs = {}) {
   const firstTransition = visual.clips.find((clip) => clip.transitionOut)?.transitionOut;
   seqState.mode = Math.max(0, TRANSITION_TECHNIQUES.indexOf(firstTransition?.technique || "fade"));
   seqState.trans = firstTransition?.duration ?? 0.6;
-  seqState.zoom = visual.clips.some((clip) => clip.motion?.some((m) => m.technique === "ken-burns"));
+  seqState.zoom = visual.clips.some((clip) => clip.motion?.length);
   seqState.percut = manifest.editor?.perCutEffects ?? visual.clips.some((clip) => !!clip.recipe);
   const firstImage = visual.clips.find((clip) => manifest.assets.find((a) => a.id === clip.assetId)?.type === "image");
   if (firstImage) seqState.hold = firstImage.duration;
@@ -1685,11 +1780,13 @@ async function restoreProject(manifest, storedBlobs = {}) {
   for (const clip of visual.clips) {
     const asset = manifest.assets.find((a) => a.id === clip.assetId);
     const blob = blobs[clip.assetId];
+    // primary が動きの主役。無ければ最初の指定を使う（役割未設定の書き手のため）
+    const motion = clip.motion?.find((m) => m.role === "primary") || clip.motion?.[0] || null;
     if (asset.type === "video") {
-      await addSlideVideo(blob, { assetId: asset.id, name: asset.name, recipe: clip.recipe, trimStart: clip.trim.in, trimEnd: clip.trim.out });
+      await addSlideVideo(blob, { assetId: asset.id, name: asset.name, recipe: clip.recipe, trimStart: clip.trim.in, trimEnd: clip.trim.out, motion });
       slides.at(-1).clipId = clip.id;
     } else {
-      await addSlideBitmap(await createImageBitmap(blob), clip.recipe, blob, asset.id);
+      await addSlideBitmap(await createImageBitmap(blob), clip.recipe, blob, asset.id, motion);
       slides.at(-1).clipId = clip.id;
     }
   }
@@ -2217,7 +2314,7 @@ async function exportGif() {
       const s = seqAt(Math.min(tMs, total), n, holdMs, transMs, seqState.zoom);
       seqFrame = {
         texA: slides[s.a].tex, texB: slides[s.b].tex,
-        t: s.t, zoomA: s.zoomA, zoomB: s.zoomB,
+        t: s.t, zoomA: s.zoomA, zoomB: s.zoomB, motA: s.motA, motB: s.motB,
       };
       seqOverride = overrideFor(s.a, s.b, s.t);
       render(tMs / 1000); // 仮想時刻。ウィンドウが隠れていても進む
@@ -2808,8 +2905,12 @@ function render(time) {
     gl.uniform1i(tu.u_mode, seqState.mode);
     gl.uniform2f(tu.u_res, W, H);
     gl.uniform1f(tu.u_seed2, sd);
-    gl.uniform1f(tu.u_zoomA, seqFrame.zoomA);
-    gl.uniform1f(tu.u_zoomB, seqFrame.zoomB);
+    const mA = seqFrame.motA || { x: 0, y: 0, scale: seqFrame.zoomA, amount: 0, tech: 0 };
+    const mB = seqFrame.motB || { x: 0, y: 0, scale: seqFrame.zoomB, amount: 0, tech: 0 };
+    gl.uniform4f(tu.u_motA, mA.x, mA.y, mA.scale, mA.amount);
+    gl.uniform4f(tu.u_motB, mB.x, mB.y, mB.scale, mB.amount);
+    gl.uniform1i(tu.u_techA, mA.tech);
+    gl.uniform1i(tu.u_techB, mB.tech);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     base = fboT.tex;
   }
@@ -2893,6 +2994,8 @@ function frame() {
       t: s.t,
       zoomA: s.zoomA,
       zoomB: s.zoomB,
+      motA: s.motA,
+      motB: s.motB,
     };
     seqOverride = overrideFor(s.a, s.b, s.t);
     dirty = true;
@@ -2918,6 +3021,8 @@ function frame() {
         t: s.t,
         zoomA: s.zoomA,
         zoomB: s.zoomB,
+        motA: s.motA,
+        motB: s.motB,
       };
       seqOverride = overrideFor(s.a, s.b, s.t);
       dirty = true;

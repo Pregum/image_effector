@@ -444,6 +444,19 @@ export function buildShortVideo(args = {}) {
         ? { velocity: 0.02, axis: i % 4 === 1 ? "x" : "y", loop: false }
         : {},
     }];
+    // 絵コンテが質感を指定していれば texture ロールとして重ねる。
+    // 文法上 texture は0〜2つで、primary とは別枠。
+    if (board?.surface) {
+      motion.push({
+        technique: board.surface,
+        role: "texture",
+        params: board.surface === "halftone"
+          ? { frequency: 48, angle: 45 }
+          : board.surface === "cmyk-misregistration"
+          ? { amount: 1.4, angle: 20, jitter: 0.3 }
+          : {},
+      });
+    }
     const technique = board ? board.transitionOut : wheel[i % wheel.length];
     const cutRecipe = board?.preset
       ? { ...(isObj(project.editor.recipe) ? project.editor.recipe : {}), preset: board.preset }
@@ -496,6 +509,9 @@ export function buildShortVideo(args = {}) {
   };
 }
 
+// 表面表現（role:texture）。カメラ系の動きへ重ねられる技法。
+const SURFACES = ["halftone", "cmyk-misregistration", "paper-collage"];
+
 const MOTIONS = [
   "orthographic-pullback", "constant-linear", "frame-echo", "stagger",
   "modular-grid", "match-cut", "controlled-chaos", "on-twos", "pose-to-pose",
@@ -518,6 +534,8 @@ function normalizeStoryboard(raw, { duration, language }) {
     const preset = PRESETS.includes(String(cut?.preset).toUpperCase())
       ? String(cut.preset).toUpperCase() : null;
     const motion = MOTIONS.includes(cut?.motion) ? cut.motion : "orthographic-pullback";
+    // 表面表現は任意。カメラの動きと重ねる質感なので、無ければ付けない
+    const surface = SURFACES.includes(cut?.surface) ? cut.surface : null;
     // The final cut must not transition into nothing; every other cut must.
     const technique = TRANSITIONS.includes(cut?.transitionOut) ? cut.transitionOut : "fade";
     return {
@@ -528,6 +546,7 @@ function normalizeStoryboard(raw, { duration, language }) {
       imagePrompt: typeof cut?.imagePrompt === "string" ? cut.imagePrompt.slice(0, 400) : "",
       preset,
       motion,
+      surface,
       transitionOut: last ? null : technique,
     };
   });
@@ -908,6 +927,6 @@ export async function renderProject(args = {}) {
   };
 }
 
-export const CONSTANTS = { PRESETS, TRANSITIONS, PLATFORMS, PURPOSES, MOTIONS, PLATFORM_SHAPE };
+export const CONSTANTS = { PRESETS, TRANSITIONS, PLATFORMS, PURPOSES, MOTIONS, SURFACES, PLATFORM_SHAPE };
 
 export { embedLocalAssets, materializeAssets };

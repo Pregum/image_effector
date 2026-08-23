@@ -769,6 +769,100 @@ async function webAppWouldOpen(manifest) {
   }
 }
 
+// --- surface techniques (role: texture) -------------------------------------
+
+// 表面表現は primary のカメラの動きへ「重ねる」ものなので、別枠(role:texture)で
+// 共存できないといけない。primary を置き換えてしまうと動きが消える。
+{
+  const appSource2 = await readFile(join(ROOT, "public/app.js"), "utf8");
+
+  const sb = await generateStoryboard({
+    project: createProjectFromBrief({ objective: "surface", duration: 8 }).project,
+    storyboard: {
+      cuts: [
+        { purpose: "hook", duration: 4, motion: "frame-echo", surface: "halftone", transitionOut: "fade", imagePrompt: "a" },
+        { purpose: "cta", duration: 4, motion: "constant-linear", surface: "cmyk-misregistration", transitionOut: null, imagePrompt: "b" },
+      ],
+    },
+    duration: 8,
+  });
+  assert.equal(sb.storyboard.cuts[0].surface, "halftone");
+  assert.equal(sb.storyboard.cuts[1].surface, "cmyk-misregistration");
+
+  const surfBuilt = buildShortVideo({
+    project: sb.project,
+    assets: frames.slice(0, 2).map((path) => ({ path })),
+    storyboard: sb.storyboard,
+    duration: 8,
+  });
+  const sClips = surfBuilt.project.timeline.tracks[0].clips;
+  // primary と texture が両方載っていること。
+  assert.deepEqual(sClips[0].motion.map((m) => m.role), ["primary", "texture"]);
+  assert.equal(sClips[0].motion[0].technique, "frame-echo", "カメラの動きが残る");
+  assert.equal(sClips[0].motion[1].technique, "halftone", "質感が重なる");
+  assert.equal(sClips[1].motion[1].technique, "cmyk-misregistration");
+  assert.deepEqual(validateProject(surfBuilt.project), { valid: true, errors: [] });
+
+  // 指定が無ければ texture は付かない（毎カットに質感を足すのは意図ではない）
+  const plain = buildShortVideo({
+    project: sb.project,
+    assets: frames.slice(0, 2).map((path) => ({ path })),
+    duration: 8,
+  });
+  assert.deepEqual(
+    plain.project.timeline.tracks[0].clips[0].motion.map((m) => m.role),
+    ["primary"],
+    "surface未指定のカットに質感を足してはいけない",
+  );
+
+  // アプリ側の取り出しでも primary と texture が分かれること。
+  const pickLine2 = appSource2.match(/const motion = clip\.motion\?\.find\([^;]+;/)[0];
+  const pickSurf = appSource2.match(/const surface = \(clip\.motion \|\| \[\]\)[^;]+;/)?.[0];
+  assert.ok(pickSurf, "public/app.js に texture の取り出しが見つからない");
+  const split = new Function("clip", `${pickLine2} ${pickSurf} return { motion, surface };`);
+  const got = split(sClips[0]);
+  assert.equal(got.motion.technique, "frame-echo");
+  assert.equal(got.surface.length, 1);
+  assert.equal(got.surface[0].technique, "halftone");
+  // primary が surface 側に混ざらないこと（!== motion の除外が効いているか）
+  assert.ok(!got.surface.includes(got.motion), "primaryがtextureへ混入してはいけない");
+
+  // レンダラーの実装表とMCPの語彙がずれないこと。
+  const surfMap = appSource2.match(/const SURFACE_KIND = \{([^}]*)\}/)?.[1];
+  assert.ok(surfMap, "public/app.js に SURFACE_KIND が見つからない");
+  for (const [, technique] of surfMap.matchAll(/"([a-z-]+)":/g)) {
+    assert.ok(
+      CONSTANTS.SURFACES.includes(technique),
+      `${technique} は描画できるのに generate_storyboard から指定できない`,
+    );
+  }
+
+  // 数値パラメータが NaN になるとuniform経由で画が真っ黒になる。Number(undefined)
+  // は NaN で `?? 既定値` では捕まらないため、有限数かどうかで判定していること。
+  const numParamSrc = appSource2.match(/function numParam\([\s\S]*?\n\}/)?.[0];
+  assert.ok(numParamSrc, "public/app.js に numParam が見つからない");
+  const numParam = new Function(`${numParamSrc} return numParam;`)();
+  assert.equal(numParam(undefined, 45), 45, "未指定は既定値になる");
+  assert.equal(numParam(null, 45), 45);
+  assert.equal(numParam("nonsense", 45), 45, "数値にならない値も既定値になる");
+  assert.equal(numParam(0, 45), 0, "0は有効な指定であって既定値ではない");
+  assert.equal(numParam(15, 45), 15);
+  const surfaceAtSrc = appSource2.match(/function surfaceAt\([\s\S]*?\n\}\n/)?.[0];
+  assert.ok(surfaceAtSrc, "public/app.js に surfaceAt が見つからない");
+  const kindMapSrc = appSource2.match(/const SURFACE_KIND = \{[^}]*\};/)[0];
+  const surfaceAt = new Function(`${kindMapSrc} ${numParamSrc} ${surfaceAtSrc} return surfaceAt;`)();
+  for (const technique of ["halftone", "cmyk-misregistration"]) {
+    // パラメータ未指定（絵コンテが既定に任せた場合）でも NaN を出さないこと。
+    const out = surfaceAt({ surface: [{ technique, role: "texture", params: {} }] }, 0.6);
+    for (const [key, value] of Object.entries(out)) {
+      assert.ok(Number.isFinite(value), `${technique}.${key} が ${value} になっている`);
+    }
+  }
+  // 未実装の技法は無効化されるだけで、描画を壊さない。
+  const unknown = surfaceAt({ surface: [{ technique: "paper-collage", role: "texture", params: {} }] }, 0.5);
+  assert.equal(unknown.kind, 0, "未実装の質感は描画しない");
+}
+
 // --- JSON-RPC over stdio ----------------------------------------------------
 
 class Client {

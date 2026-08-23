@@ -150,6 +150,15 @@ Web版のレンダラー（`public/app.js`）が実際に描けるのは、静�
 | `modular-grid` | セルごとに位相をずらし、拍で秩序へ戻す | `sequence` |
 | `ken-burns` | 寄り／引き（Web版の既定） | `direction`, `amount` |
 
+表面表現（`role: "texture"`）はカメラ系の動きへ重ねられます。1カットにつき0〜2つまでで、`primary` とは別枠です。
+
+| 技法 | 描画 | 主に効くパラメータ |
+|---|---|---|
+| `halftone` | 輝度を網点の大きさへ変換する | `frequency`（横方向の網点数）, `angle`（度）, `amount` |
+| `cmyk-misregistration` | CMYの3版を独立した向きへずらす | `amount`, `angle`（度）, `jitter` |
+
+`halftone` は `amount` を省略するとカット終盤へ向けて効きが強まります。`cmyk-misregistration` の `jitter` は1カット内でずれ量を揺らし、手押しの見当ずれのような不安定さを出します。既存のエフェクト「色収差」は水平方向のRGBずらしで、版ズレとは別のものです。
+
 上記以外の技法を指定しても**エラーにはならず、JSONにはその技法名が残ります**。描画だけが `ken-burns` へフォールバックする形なので、Desktopレンダラーや動画生成モデルへ差し替えたときに本来の表現で再レンダリングできます。
 
 複数の`motion`を持つカットでは、`role` が `primary` のものが動きの主役として使われます（未指定なら先頭）。

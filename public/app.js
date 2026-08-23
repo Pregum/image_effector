@@ -69,11 +69,15 @@ uniform vec4 u_motA;   // xy:offset z:scale w:amount
 uniform vec4 u_motB;
 uniform int u_techA;   // 0:none/ken-burns 1:frame-echo 2:modular-grid
 uniform int u_techB;
+// 表面表現(role:texture)。カメラの動きへ重ねる。
+// x: 0:none 1:halftone 2:cmyk-misregistration, y:強度, z:周波数/ずれ量, w:角度
+uniform vec4 u_surfA;
+uniform vec4 u_surfB;
 float th(float n) { return fract(sin(n * 127.1 + u_seed2 * 311.7) * 43758.5453); }
 float th2(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7)) + u_seed2 * 17.0) * 43758.5453); }
 // 1カット分の画をモーション付きで取り出す。平行移動と拡大は全技法共通で、
 // 技法ごとの効果はその上に重ねる。
-vec4 motionSample(sampler2D tex, vec2 p, vec4 mot, int tech) {
+vec4 motionSampleRaw(sampler2D tex, vec2 p, vec4 mot, int tech) {
   vec2 uv = clamp(0.5 + (p - 0.5) / mot.z - mot.xy, 0.0, 1.0);
   if (tech == 1) {
     // frame-echo: 残像。過去フレーム相当を進行方向へずらして減衰合成する
@@ -97,8 +101,48 @@ vec4 motionSample(sampler2D tex, vec2 p, vec4 mot, int tech) {
   }
   return texture(tex, uv);
 }
-vec4 sA(vec2 p) { return motionSample(u_a, p, u_motA, u_techA); }
-vec4 sB(vec2 p) { return motionSample(u_b, p, u_motB, u_techB); }
+// 版ズレ: 各色版を独立した方向へずらす。印刷の見当ずれの再現なので、
+// 既存の色収差(水平のみのRGBずらし)とは別物として扱う。
+vec4 misregister(sampler2D tex, vec2 uv, vec4 mot, int tech, float amount, float angle) {
+  float r = amount * 0.004;
+  // シアン/マゼンタ/イエローの3版を120度ずつ違う向きへ。黒版は動かさない
+  vec2 oc = vec2(cos(angle), sin(angle)) * r;
+  vec2 om = vec2(cos(angle + 2.094), sin(angle + 2.094)) * r;
+  vec2 oy = vec2(cos(angle + 4.189), sin(angle + 4.189)) * r;
+  // CMYはRGBの補色なので、ずらした版をRGBへ戻して合成する
+  float c = 1.0 - motionSampleRaw(tex, uv + oc, mot, tech).r;
+  float m = 1.0 - motionSampleRaw(tex, uv + om, mot, tech).g;
+  float y = 1.0 - motionSampleRaw(tex, uv + oy, mot, tech).b;
+  return vec4(1.0 - c, 1.0 - m, 1.0 - y, 1.0);
+}
+
+// 網点: 輝度をセル内の点の大きさへ変換する。angle/frequency/shape を持つ
+vec4 halftoneAt(sampler2D tex, vec2 uv, vec4 mot, int tech, float amount, float freq, float angle) {
+  vec4 src = motionSampleRaw(tex, uv, mot, tech);
+  float cell = max(2.0, u_res.x / max(freq, 8.0));
+  mat2 R = mat2(cos(angle), -sin(angle), sin(angle), cos(angle));
+  vec2 p = R * (uv * u_res);
+  vec2 center = (floor(p / cell) + 0.5) * cell;
+  vec2 cuv = clamp(transpose(R) * center / u_res, 0.0, 1.0);
+  vec3 sc = motionSampleRaw(tex, cuv, mot, tech).rgb;
+  float lum = dot(sc, vec3(0.299, 0.587, 0.114));
+  float rad = sqrt(1.0 - lum) * cell * 0.72;
+  float d = length(p - center);
+  float dot_ = 1.0 - smoothstep(rad - 0.8, rad + 0.8, d);
+  vec3 printed = mix(vec3(0.955, 0.945, 0.915), sc * 0.82, dot_);
+  // amountで原画とブレンドし、拍に合わせて出し入れできるようにする
+  return vec4(mix(src.rgb, printed, amount), src.a);
+}
+
+vec4 applySurface(sampler2D tex, vec2 p, vec4 mot, int tech, vec4 surf) {
+  int kind = int(surf.x + 0.5);
+  if (kind == 1) return halftoneAt(tex, p, mot, tech, surf.y, surf.z, surf.w);
+  if (kind == 2) return misregister(tex, p, mot, tech, surf.y * surf.z, surf.w);
+  return motionSampleRaw(tex, p, mot, tech);
+}
+
+vec4 sA(vec2 p) { return applySurface(u_a, p, u_motA, u_techA, u_surfA); }
+vec4 sB(vec2 p) { return applySurface(u_b, p, u_motB, u_techB, u_surfB); }
 void main() {
   vec2 uv = v_uv;
   float t = clamp(u_t, 0.0, 1.0);
@@ -1263,6 +1307,48 @@ function motionAt(slide, index, p, zoomOn) {
   }
 }
 
+// 表面表現（role:texture）。カメラの動きへ重ねる。
+// シェーダーの u_surf* に渡す vec4 を作る: x:種別 y:強度 z:周波数/ずれ量 w:角度
+const SURFACE_KIND = { halftone: 1, "cmyk-misregistration": 2 };
+
+// 数値パラメータの取り出し。Number(undefined) は NaN で、`?? 既定値` では
+// 捕まらずNaNがそのままuniformへ流れて画が壊れる。`|| 既定値` だと角度0のような
+// 有効な指定が既定値へ化ける。有限数かどうかで判定する。
+function numParam(value, fallback) {
+  // Number(null) は 0 なので、nullを先に弾かないと「未指定」が有効な0として
+  // 通ってしまう（角度0や強度0は正当な指定なので、0自体は既定値へ倒さない）
+  if (value == null || value === "") return fallback;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function surfaceAt(slide, p) {
+  const list = slide?.surface;
+  if (!Array.isArray(list) || !list.length) return { kind: 0, amount: 0, scale: 0, angle: 0 };
+  // 実装済みの技法を優先して選ぶ。未実装しか無ければ何も掛けない
+  const spec = list.find((m) => SURFACE_KIND[m?.technique]) || null;
+  if (!spec) return { kind: 0, amount: 0, scale: 0, angle: 0 };
+  const kind = SURFACE_KIND[spec.technique];
+  const params = spec.params || {};
+
+  if (kind === 1) {
+    // 網点。frequencyは横方向の網点数、angleは度で受ける（印刷の標準は45度）
+    const freq = Math.min(200, Math.max(8, numParam(params.frequency, 48)));
+    const angle = (numParam(params.angle, 45) * Math.PI) / 180;
+    // 出しっぱなしだと目が慣れるので、既定では終盤へ向けて効かせる
+    const amount = params.amount != null
+      ? Math.min(1, Math.max(0, numParam(params.amount, 1)))
+      : Math.min(1, 0.35 + 0.65 * p);
+    return { kind, amount, scale: freq, angle };
+  }
+  // 版ズレ。jitterがあると1カット内でずれ量が揺れる（手押しの誤差感）
+  const base = numParam(params.amount, 1);
+  const jitter = numParam(params.jitter, 0);
+  const wobble = jitter ? 1 + jitter * Math.sin(p * Math.PI * 6) : 1;
+  const angle = (numParam(params.angle, 20) * Math.PI) / 180;
+  return { kind, amount: Math.min(2, Math.max(0, base * wobble)), scale: 1, angle };
+}
+
 function seqAt(elapsed, n, holdMs, transMs, zoomOn) {
   let cursor = 0;
   const still = { x: 0, y: 0, scale: 1, amount: 0, tech: 0 };
@@ -1272,7 +1358,8 @@ function seqAt(elapsed, n, holdMs, transMs, zoomOn) {
     if (local <= dur || i === n - 1) {
       const p = Math.min(1, Math.max(0, local / Math.max(1, dur)));
       const m = motionAt(slides[i], i, p, zoomOn);
-      return { a: i, b: i, t: 0, motA: m, motB: m, zoomA: m.scale, zoomB: m.scale, localA: Math.max(0, local), localB: 0 };
+      const sf = surfaceAt(slides[i], p);
+      return { a: i, b: i, t: 0, motA: m, motB: m, surfA: sf, surfB: sf, zoomA: m.scale, zoomB: m.scale, localA: Math.max(0, local), localB: 0 };
     }
     cursor += dur;
     if (i < n - 1 && elapsed <= cursor + transMs) {
@@ -1280,12 +1367,17 @@ function seqAt(elapsed, n, holdMs, transMs, zoomOn) {
       // 転換中は、前カットは動き切った状態、次カットは動き始めを見せる
       const ma = motionAt(slides[i], i, 1, zoomOn);
       const mb = motionAt(slides[i + 1], i + 1, t, zoomOn);
-      return { a: i, b: i + 1, t, motA: ma, motB: mb, zoomA: ma.scale, zoomB: mb.scale, localA: dur, localB: t * transMs };
+      return {
+        a: i, b: i + 1, t, motA: ma, motB: mb,
+        surfA: surfaceAt(slides[i], 1), surfB: surfaceAt(slides[i + 1], t),
+        zoomA: ma.scale, zoomB: mb.scale, localA: dur, localB: t * transMs,
+      };
     }
     cursor += transMs;
   }
   const last = n - 1;
-  return { a: last, b: last, t: 0, motA: still, motB: still, zoomA: 1, zoomB: 1, localA: slideDurationMs(slides[last], holdMs), localB: 0 };
+  const stillSurf = { kind: 0, amount: 0, scale: 0, angle: 0 };
+  return { a: last, b: last, t: 0, motA: still, motB: still, surfA: stillSurf, surfB: stillSurf, zoomA: 1, zoomB: 1, localA: slideDurationMs(slides[last], holdMs), localB: 0 };
 }
 
 function uploadSlide(s) {
@@ -1430,13 +1522,13 @@ async function ensureEditorBase(source) {
   await loadBlob(await canvasBlob(c, "image/png"));
 }
 
-async function addSlideBitmap(bmp, recipe = null, sourceBlob = null, assetId = createAssetId(), motion = null) {
+async function addSlideBitmap(bmp, recipe = null, sourceBlob = null, assetId = createAssetId(), motion = null, surface = []) {
   if (slides.length >= MAX_SLIDES) {
     transNote.textContent = `カットは最大${MAX_SLIDES}枚までです。`;
     return;
   }
   await ensureEditorBase(bmp);
-  const s = { kind: "image", assetId, bmp, sourceBlob: sourceBlob || await bitmapBlob(bmp), tex: makeTex(), thumb: null, recipe, override: null, textTex: null, motion };
+  const s = { kind: "image", assetId, bmp, sourceBlob: sourceBlob || await bitmapBlob(bmp), tex: makeTex(), thumb: null, recipe, override: null, textTex: null, motion, surface };
   uploadSlide(s);
   buildSlideOverride(s);
   const tc = document.createElement("canvas");
@@ -1492,6 +1584,7 @@ async function addSlideVideo(blob, saved = {}) {
     kind: "video", assetId: saved.assetId || createAssetId(), video, objectUrl, sourceBlob: blob, name: saved.name || blob.name || "video",
     duration, trimStart, trimEnd, tex: makeTex(), thumb: tc.toDataURL(), recipe: saved.recipe || null,
     override: null, textTex: null, mediaCanvas: null, motion: saved.motion || null,
+    surface: saved.surface || [],
   };
   uploadSlide(s);
   buildSlideOverride(s);
@@ -1604,9 +1697,12 @@ function buildProjectManifest(sourceKind = "indexeddb") {
       recipe: s.recipe || null,
       // MCPなどが指定した技法は保持したまま書き戻す。指定が無いカットだけ
       // 従来どおりKen Burnsを当てる（zoomのチェックが入っているとき）
-      motion: s.motion
-        ? [{ technique: s.motion.technique, role: s.motion.role || "primary", params: s.motion.params || {} }]
-        : seqState.zoom ? [{ technique: "ken-burns", role: "primary", params: { direction: i % 2 ? "out" : "in", amount: 0.08 } }] : [],
+      motion: [
+        ...(s.motion
+          ? [{ technique: s.motion.technique, role: s.motion.role || "primary", params: s.motion.params || {} }]
+          : seqState.zoom ? [{ technique: "ken-burns", role: "primary", params: { direction: i % 2 ? "out" : "in", amount: 0.08 } }] : []),
+        ...(s.surface || []).map((m) => ({ technique: m.technique, role: "texture", params: m.params || {} })),
+      ],
       transitionOut: transition,
     };
     cursor += duration + (transition?.duration || 0);
@@ -1782,11 +1878,13 @@ async function restoreProject(manifest, storedBlobs = {}) {
     const blob = blobs[clip.assetId];
     // primary が動きの主役。無ければ最初の指定を使う（役割未設定の書き手のため）
     const motion = clip.motion?.find((m) => m.role === "primary") || clip.motion?.[0] || null;
+    // 表面表現(texture)はカメラの動きと重ねられる。文法上0〜2つまで
+    const surface = (clip.motion || []).filter((m) => m.role === "texture" && m !== motion).slice(0, 2);
     if (asset.type === "video") {
-      await addSlideVideo(blob, { assetId: asset.id, name: asset.name, recipe: clip.recipe, trimStart: clip.trim.in, trimEnd: clip.trim.out, motion });
+      await addSlideVideo(blob, { assetId: asset.id, name: asset.name, recipe: clip.recipe, trimStart: clip.trim.in, trimEnd: clip.trim.out, motion, surface });
       slides.at(-1).clipId = clip.id;
     } else {
-      await addSlideBitmap(await createImageBitmap(blob), clip.recipe, blob, asset.id, motion);
+      await addSlideBitmap(await createImageBitmap(blob), clip.recipe, blob, asset.id, motion, surface);
       slides.at(-1).clipId = clip.id;
     }
   }
@@ -2315,6 +2413,7 @@ async function exportGif() {
       seqFrame = {
         texA: slides[s.a].tex, texB: slides[s.b].tex,
         t: s.t, zoomA: s.zoomA, zoomB: s.zoomB, motA: s.motA, motB: s.motB,
+        surfA: s.surfA, surfB: s.surfB,
       };
       seqOverride = overrideFor(s.a, s.b, s.t);
       render(tMs / 1000); // 仮想時刻。ウィンドウが隠れていても進む
@@ -2911,6 +3010,11 @@ function render(time) {
     gl.uniform4f(tu.u_motB, mB.x, mB.y, mB.scale, mB.amount);
     gl.uniform1i(tu.u_techA, mA.tech);
     gl.uniform1i(tu.u_techB, mB.tech);
+    const zero = { kind: 0, amount: 0, scale: 0, angle: 0 };
+    const sA = seqFrame.surfA || zero;
+    const sB = seqFrame.surfB || zero;
+    gl.uniform4f(tu.u_surfA, sA.kind, sA.amount, sA.scale, sA.angle);
+    gl.uniform4f(tu.u_surfB, sB.kind, sB.amount, sB.scale, sB.angle);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     base = fboT.tex;
   }
@@ -2996,6 +3100,8 @@ function frame() {
       zoomB: s.zoomB,
       motA: s.motA,
       motB: s.motB,
+      surfA: s.surfA,
+      surfB: s.surfB,
     };
     seqOverride = overrideFor(s.a, s.b, s.t);
     dirty = true;
@@ -3023,6 +3129,8 @@ function frame() {
         zoomB: s.zoomB,
         motA: s.motA,
         motB: s.motB,
+        surfA: s.surfA,
+        surfB: s.surfB,
       };
       seqOverride = overrideFor(s.a, s.b, s.t);
       dirty = true;

@@ -183,8 +183,10 @@ to `build_short_video` and that pacing lands on the timeline as written.
 
 The renderer draws the camera techniques from
 [Motion Grammar](docs/motion-grammar.md) — `orthographic-pullback`, `constant-linear`,
-`frame-echo`, `modular-grid` and `ken-burns`. Any other technique is kept verbatim in the
-project file and only *drawn* as a fallback, so a future renderer can honour it properly.
+`frame-echo`, `modular-grid` and `ken-burns`, plus the surface techniques `halftone` and
+`cmyk-misregistration`, which layer on top of a camera move (`role: "texture"`, up to two
+per cut). Any other technique is kept verbatim in the project file and only *drawn* as a
+fallback, so a future renderer can honour it properly.
 
 Pass the `project` from each result straight into the next tool:
 

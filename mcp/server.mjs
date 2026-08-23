@@ -16,7 +16,7 @@ const SERVER_INFO = { name: "noiz-lab", title: "NOIZ LAB", version: "1.0.0" };
 const PROTOCOL_VERSION = "2025-06-18";
 const SUPPORTED_PROTOCOLS = new Set([PROTOCOL_VERSION, "2025-03-26", "2024-11-05"]);
 
-const { PRESETS, TRANSITIONS, PLATFORMS, PURPOSES, MOTIONS } = CONSTANTS;
+const { PRESETS, TRANSITIONS, PLATFORMS, PURPOSES, MOTIONS, SURFACES } = CONSTANTS;
 
 const projectSchema = { type: "object", description: "NOIZ LAB Project JSON (schemas/project.schema.json)" };
 
@@ -69,7 +69,8 @@ const TOOLS = [
                   caption: { type: "string", maxLength: 60, description: "画面に出す字幕" },
                   imagePrompt: { type: "string", maxLength: 400, description: "画像生成用の英語プロンプト" },
                   preset: { enum: PRESETS },
-                  motion: { enum: MOTIONS, description: "docs/motion-grammar.md の技法ID" },
+                  motion: { enum: MOTIONS, description: "docs/motion-grammar.md の技法ID（カメラの動き）" },
+                  surface: { enum: SURFACES, description: "質感を重ねる場合の技法。halftone は網点、cmyk-misregistration は版ズレ" },
                   transitionOut: { enum: [...TRANSITIONS, null], description: "最後のカットは null" },
                 },
               },

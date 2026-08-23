@@ -2,7 +2,7 @@
 // same logic can back a stdio server, a CLI, or a future Worker endpoint.
 
 import { existsSync } from "node:fs";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { dirname, extname, join, resolve } from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -752,6 +752,58 @@ export function validateProjectTool(args = {}) {
   return { valid, errors };
 }
 
+// The Web app only materialises assets whose source.kind is "embedded"; a
+// "local" path means nothing in a browser, and importing such a project fails
+// with 素材がありません. These limits mirror public/app.js so a file this side
+// writes is one the app will actually open.
+const MAX_EMBEDDED_TOTAL = 150 * 1024 * 1024; // raw bytes, as app.js checks on export
+const MAX_EMBEDDED_ONE = 280_000_000;         // base64 chars, as the schema allows
+
+const MIME_BY_EXT = {
+  ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp",
+  ".gif": "image/gif", ".mp4": "video/mp4", ".webm": "video/webm", ".m4a": "audio/mp4",
+  ".mp3": "audio/mpeg", ".wav": "audio/wav",
+};
+
+/** Inline every local asset as base64 so the project opens in the Web app. */
+async function embedLocalAssets(project) {
+  let total = 0;
+  for (const asset of project.assets) {
+    if (asset.source.kind !== "local") continue;
+    const path = asset.source.ref;
+    if (!path || !existsSync(path)) fail(`asset file not found: ${path}`);
+    total += (await stat(path)).size;
+    if (total > MAX_EMBEDDED_TOTAL) {
+      fail(`embedded assets exceed ${Math.round(MAX_EMBEDDED_TOTAL / 1024 / 1024)}MB; keep them as local paths or use fewer cuts`);
+    }
+    const data = (await readFile(path)).toString("base64");
+    if (data.length > MAX_EMBEDDED_ONE) fail(`asset is too large to embed: ${path}`);
+    asset.source = { kind: "embedded", data };
+    if (!asset.mime || asset.mime === "application/octet-stream") {
+      asset.mime = MIME_BY_EXT[extname(path).toLowerCase()] || asset.mime;
+    }
+  }
+  return { project, embedded: project.assets.filter((a) => a.source.kind === "embedded").length, bytes: total };
+}
+
+/** Write embedded assets back out as files so the CLI renderer can read them. */
+async function materializeAssets(project, outDir) {
+  await mkdir(outDir, { recursive: true });
+  let written = 0;
+  for (const [i, asset] of project.assets.entries()) {
+    if (asset.source.kind !== "embedded") continue;
+    const bytes = Buffer.from(asset.source.data, "base64");
+    if (!bytes.length) fail(`assets[${i}] decoded to an empty file`);
+    const ext = Object.entries(MIME_BY_EXT).find(([, mime]) => mime === asset.mime)?.[0]
+      || (bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) ? ".png" : ".jpg");
+    const path = join(outDir, `${asset.id}${ext}`);
+    await writeFile(path, bytes);
+    asset.source = { kind: "local", ref: path };
+    written++;
+  }
+  return { project, materialized: written };
+}
+
 function run(command, cliArgs, { timeout = 600_000 } = {}) {
   return new Promise((ok, failRun) => {
     const child = spawn(command, cliArgs, { cwd: ROOT, stdio: ["ignore", "pipe", "pipe"] });
@@ -778,16 +830,24 @@ export async function renderProject(args = {}) {
   if (clips.length < 2) fail("rendering needs at least 2 cuts");
   if (clips.length > 8) fail(`the video pipeline supports at most 8 cuts; got ${clips.length}`);
 
-  const byId = new Map(project.assets.map((a) => [a.id, a]));
+  // A project saved by the Web app carries its assets inline. Unpack them next
+  // to the output rather than refusing, so a browser-authored project renders
+  // without the caller having to know about the difference.
+  let working = project;
+  let materialized = 0;
+  if (project.assets.some((a) => a.source.kind === "embedded")) {
+    ({ project: working, materialized } = await materializeAssets(project, join(dirname(output), "assets")));
+  }
+
+  const byId = new Map(working.assets.map((a) => [a.id, a]));
   const cuts = clips.map((clip, i) => {
     const asset = byId.get(clip.assetId);
-    // Only on-disk assets can reach the CLI; embedded/R2 sources would need a
-    // materialisation step that does not exist yet, so say so plainly.
+    // Anything still not on disk (r2, url, indexeddb) has no fetch path here.
     if (asset.source.kind !== "local" || !asset.source.ref) {
-      fail(`assets[${i}] must have source.kind "local" with a file path to render`);
+      fail(`assets[${i}] has source.kind "${asset.source.kind}"; only local files and embedded data can be rendered`);
     }
     if (!existsSync(asset.source.ref)) fail(`asset file not found: ${asset.source.ref}`);
-    const preset = clip.recipe?.preset || project.editor.recipe?.preset || "CINEMA";
+    const preset = clip.recipe?.preset || working.editor.recipe?.preset || "CINEMA";
     if (!PRESETS.includes(preset)) fail(`unknown preset on cut ${i + 1}: ${preset}`);
     return `${asset.source.ref}@${preset}`;
   });
@@ -809,7 +869,7 @@ export async function renderProject(args = {}) {
   await mkdir(dirname(output), { recursive: true });
   const cliArgs = [
     VARIETY_CLI, output, ...cuts,
-    "--ratio", project.canvas.ratio === "original" ? "16:9" : project.canvas.ratio,
+    "--ratio", working.canvas.ratio === "original" ? "16:9" : working.canvas.ratio,
     "--hold", String(hold),
     "--duration", String(transitionDuration),
   ];
@@ -822,6 +882,7 @@ export async function renderProject(args = {}) {
     hold,
     transitions,
     timelineDuration: round(timelineDuration),
+    ...(materialized ? { materializedAssets: materialized } : {}),
     // The real file runs a little longer: each concatenated clip carries about
     // 0.3s of encoder overhead, so expect roughly +0.3s per cut boundary.
     predictedDuration,
@@ -833,3 +894,5 @@ export async function renderProject(args = {}) {
 }
 
 export const CONSTANTS = { PRESETS, TRANSITIONS, PLATFORMS, PURPOSES, MOTIONS, PLATFORM_SHAPE };
+
+export { embedLocalAssets, materializeAssets };

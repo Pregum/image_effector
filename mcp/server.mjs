@@ -2,12 +2,12 @@
 // NOIZ LAB MCP server (stdio). Hand-written JSON-RPC so the repo keeps its
 // zero-dependency policy: node mcp/server.mjs is all it takes to run.
 
-import { readFile, writeFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
 import {
   CONSTANTS, ToolError, applyStyleBible, buildShortVideo, createProjectFromBrief,
-  generateMissingAssets, generateStoryboard, renderProject, reviewHookAndPacing,
-  validateProjectTool,
+  embedLocalAssets, generateMissingAssets, generateStoryboard, materializeAssets,
+  renderProject, reviewHookAndPacing, validateProjectTool,
 } from "./tools.mjs";
 
 const SERVER_INFO = { name: "noiz-lab", title: "NOIZ LAB", version: "1.0.0" };
@@ -233,10 +233,17 @@ const TOOLS = [
     inputSchema: {
       type: "object",
       required: ["path"],
-      properties: { path: { type: "string", maxLength: 2048, description: "読み込む .json のパス" } },
+      properties: {
+        path: { type: "string", maxLength: 2048, description: "読み込む .json のパス" },
+        extractAssetsTo: {
+          type: "string",
+          maxLength: 2048,
+          description: "埋め込み素材を展開するディレクトリ。Web版で保存したプロジェクトを render_project へ渡すときに指定します",
+        },
+      },
       additionalProperties: false,
     },
-    handler: async ({ path }) => {
+    handler: async ({ path, extractAssetsTo }) => {
       if (typeof path !== "string" || !path.trim()) throw new ToolError("path must be a non-empty string");
       let text;
       try { text = await readFile(resolve(path), "utf8"); }
@@ -246,29 +253,66 @@ const TOOLS = [
       catch { throw new ToolError(`${path} is not valid JSON`); }
       const { valid, errors } = validateProjectTool({ project });
       if (!valid) throw new ToolError(`${path} is not a valid NOIZ LAB project: ${errors.slice(0, 4).join(" / ")}`);
-      return { project };
+      // render_project needs files on disk, so a project saved by the Web app
+      // (everything embedded) has to be unpacked before it can be rendered.
+      if (typeof extractAssetsTo === "string" && extractAssetsTo.trim()) {
+        const { project: out, materialized } = await materializeAssets(project, resolve(extractAssetsTo));
+        return { project: out, materializedAssets: materialized };
+      }
+      const embedded = project.assets.filter((a) => a.source.kind === "embedded").length;
+      return {
+        project,
+        ...(embedded ? {
+          note: `${embedded}件の素材がJSONへ埋め込まれています。render_project へ渡すには extractAssetsTo でファイルへ展開してください。`,
+        } : {}),
+      };
     },
   },
   {
     name: "write_project",
     title: "Write project file",
-    description: "Project JSON を検証してからディスクへ保存します。Web版の「プロジェクトを読み込む」でそのまま開けます。",
+    description: "Project JSON を検証してからディスクへ保存します。既定でローカル素材をJSONへ埋め込むので、Web版の「↑ JSONを開く」でそのまま開けます（素材は合計150MBまで）。",
     inputSchema: {
       type: "object",
       required: ["project", "path"],
       properties: {
         project: projectSchema,
-        path: { type: "string", maxLength: 2048, description: "保存先の .json パス" },
+        path: { type: "string", maxLength: 2048, description: "保存先の .json パス。Web版が既定で書き出すのは .noiz.json です" },
+        embedAssets: {
+          type: "boolean",
+          default: true,
+          description: "true（既定）でローカル素材をbase64で埋め込みます。false にするとファイルパス参照のままになり、Web版では開けません",
+        },
       },
       additionalProperties: false,
     },
-    handler: async ({ project, path }) => {
+    handler: async ({ project, path, embedAssets = true }) => {
       if (typeof path !== "string" || !path.trim()) throw new ToolError("path must be a non-empty string");
       const { valid, errors } = validateProjectTool({ project });
       if (!valid) throw new ToolError(`refusing to write an invalid project: ${errors.slice(0, 4).join(" / ")}`);
+      let out = structuredClone(project);
+      let embedded = 0;
+      if (embedAssets) ({ project: out, embedded } = await embedLocalAssets(out));
+      // Embedding can push a valid project past the schema's per-asset cap.
+      const after = validateProjectTool({ project: out });
+      if (!after.valid) throw new ToolError(`embedding produced an invalid project: ${after.errors.slice(0, 4).join(" / ")}`);
       const target = resolve(path);
-      await writeFile(target, JSON.stringify(project, null, 2) + "\n", "utf8");
-      return { path: target, bytes: JSON.stringify(project).length };
+      const text = JSON.stringify(out, null, 2) + "\n";
+      // Create the parent directory rather than failing with a raw ENOENT; the
+      // caller naming a path that does not exist yet is normal.
+      await mkdir(dirname(target), { recursive: true });
+      try { await writeFile(target, text, "utf8"); }
+      catch (error) { throw new ToolError(`could not write ${target}: ${error.message}`); }
+      const local = out.assets.filter((a) => a.source.kind === "local").length;
+      return {
+        path: target,
+        bytes: text.length,
+        embeddedAssets: embedded,
+        // A file with local paths left in it will not open in the browser; say
+        // so here rather than letting the user find out in the Web app.
+        openableInWebApp: local === 0,
+        ...(local ? { note: `${local}件の素材がファイルパス参照のままです。Web版で開くには embedAssets を true にしてください。` } : {}),
+      };
     },
   },
 ];

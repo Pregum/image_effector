@@ -194,8 +194,19 @@ the same style-bible wording to every prompt, so separately generated cuts still
 one piece. Up to 8 images per call; a partial batch still returns what succeeded, so you
 can retry only the cuts that failed.
 
-Posting (`export_for_tiktok`) is not implemented. `render_project` currently handles only
-assets whose `source.kind` is `local`, up to 8 cuts, holding each 0.3–3s.
+### Round-tripping with the web app
+
+`write_project` embeds local assets into the JSON by default, so the file opens directly
+via the web app's "↑ JSONを開く" — plan and generate over MCP, then touch it up in the
+browser. The embedding is what makes that work: a browser cannot read a file path. (Up to
+150MB total; `embedAssets: false` keeps path references but the app will not open it.)
+
+The reverse works too. A `.noiz.json` saved by the web app carries its assets inline, so
+pass `extractAssetsTo` to `read_project` to unpack them for `render_project` — which also
+unpacks embedded assets on its own, so a browser-authored project renders as-is.
+
+Posting (`export_for_tiktok`) is not implemented. `render_project` handles assets whose
+`source.kind` is `local` or `embedded`, up to 8 cuts, holding each 0.3–3s.
 
 Rendering is a multi-pass pipeline: source (＋ CPU pixel sort) → separable Gaussian
 blur → luminance extraction + blur (halation) → a final composite shader handling

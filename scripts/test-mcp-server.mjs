@@ -10,7 +10,9 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { validateProject } from "../public/project-format.js";
 import { createServer } from "node:http";
+import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
+import { callTool } from "../mcp/server.mjs";
 import {
   ToolError, applyStyleBible, buildShortVideo, createProjectFromBrief,
   generateMissingAssets, generateStoryboard, renderProject, reviewHookAndPacing,
@@ -545,12 +547,15 @@ await assert.rejects(
   /at least 2 cuts/,
   "a single cut cannot become a transition video",
 );
-const embedded = structuredClone(built.project);
-embedded.assets[0].source = { kind: "embedded", data: "AA==" };
+// A project saved by the Web app has its assets inline. Rendering must unpack
+// them rather than refusing, so a browser-authored project renders unchanged.
+// (Verified end to end further down; here we only check the guard is gone.)
+const unrenderable = structuredClone(built.project);
+unrenderable.assets[0].source = { kind: "r2", ref: "works/abc" };
 await assert.rejects(
-  () => renderProject({ project: embedded, output: "out.mp4" }),
-  /source\.kind "local"/,
-  "embedded assets cannot reach the CLI yet",
+  () => renderProject({ project: unrenderable, output: "out.mp4" }),
+  /only local files and embedded data/,
+  "a source kind with no fetch path is refused",
 );
 const missing = structuredClone(built.project);
 missing.assets[0].source.ref = join(ROOT, "does-not-exist.png");
@@ -576,6 +581,104 @@ await assert.rejects(
     `an achievable timeline must render at its own length: ${predicted} vs ${timeline}`,
   );
   assert.ok(hold < timeline / clipsToRender.length, "hold must be shorter than the per-cut duration");
+}
+
+// --- Web app round trip -----------------------------------------------------
+
+// The Web app only materialises assets whose source.kind is "embedded"; a local
+// path means nothing in a browser, and importing such a project throws
+// 素材がありません. Rather than paraphrase that rule here (a copy would drift
+// from the app), lift the real asset-resolution prologue out of
+// public/app.js's restoreProject and run it. A change to the app's import rules
+// then shows up as a failure here.
+const restoreSource = (await readFile(join(ROOT, "public/app.js"), "utf8"))
+  .match(/async function restoreProject[\s\S]*?\n\}/)?.[0];
+assert.ok(restoreSource, "could not find restoreProject in public/app.js");
+const restorePrologue = restoreSource.split("clearSequence()")[0];
+assert.match(restorePrologue, /素材がありません/, "the extracted prologue must contain the asset check");
+
+const runAppImport = new Function(
+  // storedBlobs is a default parameter in the app (blobs already in IndexedDB);
+  // an imported file starts with none, so pass an empty set.
+  "manifest", "storedBlobs", "validateProject", "base64ToBlob",
+  `return (async () => {${restorePrologue.replace(/^async function restoreProject\([^)]*\)\s*\{/, "")}
+    return { blobs: Object.keys(blobs).length, clips: visual.clips.length };
+  })()`,
+);
+
+// Returns what the Web app would do with this file: open it, or throw.
+async function webAppWouldOpen(manifest) {
+  try {
+    const info = await runAppImport(
+      manifest,
+      {},
+      validateProject,
+      (data, type) => ({ size: Buffer.from(data, "base64").length, type }),
+    );
+    return { ok: true, ...info };
+  } catch (error) {
+    return { ok: false, reason: error.message };
+  }
+}
+
+{
+  const roundTrip = join(work0, "roundtrip");
+  const projectPath = join(roundTrip, "project.noiz.json");
+  const built2 = buildShortVideo({
+    project: createProjectFromBrief({ objective: "round trip", duration: 6 }).project,
+    assets: frames.slice(0, 2).map((path) => ({ path })),
+    duration: 6,
+  });
+  // A project straight from build_short_video references files on disk, which a
+  // browser cannot read: this is exactly the break this feature fixes.
+  const beforeEmbed = await webAppWouldOpen(built2.project);
+  assert.equal(beforeEmbed.ok, false, "local paths must not be openable in the app");
+  assert.match(beforeEmbed.reason, /素材がありません/, "and it fails with the app's own message");
+
+  const written = await callTool("write_project", { project: built2.project, path: projectPath });
+  assert.equal(written.embeddedAssets, 2, "local assets are embedded on write");
+  assert.equal(written.openableInWebApp, true);
+  assert.equal(written.note, undefined, "a fully embedded project needs no warning");
+
+  const onDisk = JSON.parse(await readFile(projectPath, "utf8"));
+  assert.deepEqual(validateProject(onDisk), { valid: true, errors: [] });
+  assert.ok(onDisk.assets.every((a) => a.source.kind === "embedded"));
+  const opened = await webAppWouldOpen(onDisk);
+  assert.equal(opened.ok, true, `the written file must open in the Web app: ${opened.reason ?? ""}`);
+  assert.equal(opened.blobs, 2, "every asset resolves to a blob");
+  assert.equal(opened.clips, 2, "every clip finds its asset");
+  // The embedded bytes must be the real image, not a truncated placeholder.
+  const firstBytes = Buffer.from(onDisk.assets[0].source.data, "base64");
+  assert.deepEqual(firstBytes, await readFile(frames[0]), "embedded data must match the source file");
+
+  // Opting out keeps paths and says so, rather than writing a file that fails
+  // to open with no explanation.
+  const rawPath = join(roundTrip, "raw.json");
+  const raw = await callTool("write_project", { project: built2.project, path: rawPath, embedAssets: false });
+  assert.equal(raw.embeddedAssets, 0);
+  assert.equal(raw.openableInWebApp, false);
+  assert.match(raw.note, /embedAssets/);
+  // The opt-out really does produce a file the app rejects, so openableInWebApp
+  // is reporting the truth rather than a guess.
+  const rawOnDisk = JSON.parse(await readFile(rawPath, "utf8"));
+  assert.equal((await webAppWouldOpen(rawOnDisk)).ok, false);
+
+  // Reading back an embedded project warns that it needs unpacking to render.
+  const readBack = await callTool("read_project", { path: projectPath });
+  assert.equal(readBack.project.id, built2.project.id);
+  assert.match(readBack.note, /extractAssetsTo/);
+
+  // ...and unpacking restores files the renderer can read.
+  const extractDir = join(roundTrip, "extracted");
+  const extracted = await callTool("read_project", { path: projectPath, extractAssetsTo: extractDir });
+  assert.equal(extracted.materializedAssets, 2);
+  assert.ok(extracted.project.assets.every((a) => a.source.kind === "local"));
+  for (const asset of extracted.project.assets) {
+    assert.ok(existsSync(asset.source.ref), `extracted file must exist: ${asset.source.ref}`);
+  }
+  assert.deepEqual(await readFile(extracted.project.assets[0].source.ref), await readFile(frames[0]));
+  // The unpacked project is renderable again: the full loop closes.
+  assert.deepEqual(validateProject(extracted.project), { valid: true, errors: [] });
 }
 
 // --- JSON-RPC over stdio ----------------------------------------------------

@@ -88,8 +88,20 @@ create_project_from_brief → generate_storyboard → generate_missing_assets
   → apply_style_bible → build_short_video → review_hook_and_pacing → render_project
 ```
 
+### Web版との行き来
+
+`write_project` は既定でローカル素材をJSONへ埋め込みます。Web版の「↑ JSONを開く」で
+そのまま開けるので、**MCPで企画・生成 → ブラウザで手直し**という往復ができます。
+素材はファイルパス参照のままだとブラウザから読めないため、この埋め込みが必要です
+（合計150MBまで。`embedAssets: false` で参照のままにもできますが、Web版では開けません）。
+
+逆向きも同じです。Web版が書き出した `.noiz.json` は素材が埋め込まれているので、
+`read_project` に `extractAssetsTo` を渡してファイルへ展開すると `render_project` へ渡せます。
+`render_project` は埋め込み素材を自動で展開するため、ブラウザで作ったプロジェクトを
+そのまま書き出すこともできます。
+
 `export_for_tiktok`（投稿API）は未実装です。
-現状 `render_project` が扱えるのは `source.kind` が `local` の素材のみで、
+`render_project` が扱えるのは `source.kind` が `local` か `embedded` の素材で、
 1本あたり最大8カット、1カットの保持時間は0.3〜3秒です。
 
 ## 作例（AIシーン生成）
@@ -352,6 +364,7 @@ MIT License（[LICENSE](LICENSE)）。
 - [ ] Motion Grammarを使った意図ベースの演出選択と組み合わせ
 - [ ] 字幕生成、分割、カット別トランジション、フック／テンポの自動レビュー
 - [x] 共通Project JSONと素材埋め込み入出力
+- [x] MCPとWeb版のプロジェクト往復（素材埋め込みJSON経由）
 - [ ] クラウド同期（Web / Desktop / Mobile）
 - [x] MCPサーバーから企画・編集・レビュー・書き出しを操作
 - [x] MCPからのAI絵コンテ生成（自前で書く／サーバーのLLMに書かせる）

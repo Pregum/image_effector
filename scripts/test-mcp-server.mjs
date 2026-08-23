@@ -10,13 +10,16 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { validateProject } from "../public/project-format.js";
 import { createServer } from "node:http";
+import { readFile } from "node:fs/promises";
 import {
   ToolError, applyStyleBible, buildShortVideo, createProjectFromBrief,
-  generateStoryboard, renderProject, reviewHookAndPacing,
+  generateMissingAssets, generateStoryboard, renderProject, reviewHookAndPacing,
 } from "../mcp/tools.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const SERVER = join(ROOT, "mcp/server.mjs");
+
+const work0 = await mkdtemp(join(tmpdir(), "noizlab-mcp-assets-"));
 
 const throws = (fn, pattern, label) => assert.throws(fn, (e) => {
   assert.ok(e instanceof ToolError, `${label}: expected ToolError, got ${e.constructor.name}`);
@@ -302,6 +305,176 @@ await assert.rejects(
   "an unreachable endpoint is a tool error",
 );
 
+// --- generate_missing_assets ------------------------------------------------
+
+// A 1x1 PNG, so the test writes and reads back real image bytes rather than
+// asserting on a placeholder string.
+const PNG_1PX = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+
+{
+  const seen = [];
+  const stub = createServer((req, res) => {
+    let raw = "";
+    req.on("data", (d) => { raw += d; });
+    req.on("end", () => {
+      if (req.url !== "/api/assets") { res.writeHead(404).end("{}"); return; }
+      const sent = JSON.parse(raw);
+      seen.push(sent);
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({
+        requested: sent.prompts.length,
+        // Reply out of order to prove the caller re-sorts by index.
+        assets: sent.prompts.map((prompt, i) => ({
+          index: sent.prompts.length - 1 - i,
+          prompt: sent.prompts[sent.prompts.length - 1 - i],
+          contentType: "image/png",
+          data: PNG_1PX,
+        })),
+        errors: [],
+      }));
+    });
+  });
+  await new Promise((ok) => stub.listen(0, "127.0.0.1", ok));
+  const base = `http://127.0.0.1:${stub.address().port}`;
+  const outDir = join(work0, "assets");
+  try {
+    const styled2 = applyStyleBible({
+      project: createProjectFromBrief({ objective: "夜のメモアプリ", duration: 9 }).project,
+      styleBible: { preset: "NEON", palette: ["#ff00aa"], lighting: "neon night", texture: ["film grain"], seed: 7 },
+    }).project;
+
+    const made = await generateMissingAssets({
+      project: styled2,
+      endpoint: base,
+      outDir,
+      storyboard: handWritten,
+    });
+    assert.equal(made.assets.length, 3);
+    assert.equal(made.requested, 3);
+    assert.deepEqual(made.failures, []);
+    // Files must actually exist and contain the bytes the server sent.
+    for (const asset of made.assets) {
+      const bytes = await readFile(asset.path);
+      assert.deepEqual(bytes, Buffer.from(PNG_1PX, "base64"), "the image bytes must round-trip to disk");
+    }
+    assert.deepEqual(made.assets.map((a) => a.index), [0, 1, 2], "assets are re-sorted into cut order");
+    // The extension follows the actual bytes, not the server's label: a .jpg
+    // holding PNG data would break the renderer downstream.
+    assert.match(made.assets[0].path, /cut-01\.png$/);
+    assert.equal(made.assets[0].contentType, "image/png");
+
+    // The style bible must reach every prompt: that is what keeps separately
+    // generated cuts looking like one piece.
+    assert.equal(seen.length, 1);
+    assert.equal(seen[0].prompts.length, 3);
+    assert.match(seen[0].style, /neon night/);
+    assert.match(seen[0].style, /film grain/);
+    assert.match(seen[0].style, /#ff00aa/);
+    assert.equal(seen[0].negativePrompt, styled2.styleBible.negativePrompt);
+    // The prompts come from the storyboard's imagePrompt, not its captions.
+    assert.equal(seen[0].prompts[0], handWritten.cuts[0].imagePrompt);
+
+    assert.equal(made.project.assets.length, 3);
+    assert.equal(made.project.assets[0].type, "generated-image");
+    assert.equal(made.project.assets[0].source.kind, "local");
+    assert.equal(made.project.assets[0].generation.seed, 7, "generation records the style bible seed");
+    assert.deepEqual(validateProject(made.project), { valid: true, errors: [] });
+
+    // Generated assets must be usable by the rest of the pipeline unchanged.
+    const fromGenerated = buildShortVideo({
+      project: made.project,
+      storyboard: handWritten,
+      duration: 9,
+    });
+    assert.equal(fromGenerated.summary.cuts, 3);
+    assert.deepEqual(validateProject(fromGenerated.project), { valid: true, errors: [] });
+
+    // Without a project, only the files come back.
+    const bare = await generateMissingAssets({
+      endpoint: base, outDir, prompts: ["a neon sign at night"],
+    });
+    assert.equal(bare.project, undefined);
+    assert.equal(bare.assets.length, 1);
+  } finally {
+    await new Promise((ok) => stub.close(ok));
+  }
+}
+
+// Partial failures must surface per cut, not fail the whole batch: the caller
+// retries only what did not come back.
+{
+  const partial = createServer((req, res) => {
+    let raw = "";
+    req.on("data", (d) => { raw += d; });
+    req.on("end", () => {
+      const sent = JSON.parse(raw);
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({
+        requested: sent.prompts.length,
+        assets: [{ index: 0, prompt: sent.prompts[0], contentType: "image/png", data: PNG_1PX }],
+        errors: [{ index: 1, error: "quota exceeded" }],
+      }));
+    });
+  });
+  await new Promise((ok) => partial.listen(0, "127.0.0.1", ok));
+  const base = `http://127.0.0.1:${partial.address().port}`;
+  try {
+    const r = await generateMissingAssets({
+      endpoint: base, outDir: join(work0, "partial"), prompts: ["one", "two"],
+    });
+    assert.match(r.assets[0].path, /\.png$/, "PNG bytes get a .png name whatever the label says");
+    assert.equal(r.assets.length, 1, "the successful cut is kept");
+    assert.equal(r.failures.length, 1);
+    assert.equal(r.failures[0].index, 1);
+    assert.equal(r.failures[0].prompt, "two", "a failure names the prompt to retry");
+  } finally {
+    await new Promise((ok) => partial.close(ok));
+  }
+}
+
+// A batch where nothing succeeded is an error, not an empty success.
+{
+  const broken = createServer((_req, res) => {
+    res.writeHead(502, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: "generation failed", errors: [{ index: 0, error: "generation failed" }] }));
+  });
+  await new Promise((ok) => broken.listen(0, "127.0.0.1", ok));
+  const base = `http://127.0.0.1:${broken.address().port}`;
+  try {
+    await assert.rejects(
+      () => generateMissingAssets({ endpoint: base, outDir: join(work0, "broken"), prompts: ["x"] }),
+      /returned 502/,
+      "a failed batch surfaces the server status",
+    );
+  } finally {
+    await new Promise((ok) => broken.close(ok));
+  }
+}
+
+await assert.rejects(
+  () => generateMissingAssets({ endpoint: "http://127.0.0.1:1", outDir: "/tmp/x" }),
+  /pass prompts, or a storyboard/,
+  "something to generate is required",
+);
+await assert.rejects(
+  () => generateMissingAssets({ endpoint: "ftp://example.com", outDir: "/tmp/x", prompts: ["a"] }),
+  /must be http or https/,
+  "non-http endpoints are refused",
+);
+await assert.rejects(
+  () => generateMissingAssets({
+    endpoint: "http://127.0.0.1:1", outDir: "/tmp/x",
+    storyboard: { cuts: [{ purpose: "hook", duration: 2 }] },
+  }),
+  /needs an imagePrompt/,
+  "a storyboard with no image prompts cannot be generated from",
+);
+await assert.rejects(
+  () => generateMissingAssets({ endpoint: "http://127.0.0.1:1", outDir: "/tmp/x", prompts: ["x"], timeoutMs: 5000 }),
+  (e) => e instanceof ToolError && /could not reach/.test(e.message),
+  "an unreachable endpoint is a tool error",
+);
+
 // --- build_short_video driven by a storyboard -------------------------------
 
 const boardBuilt = buildShortVideo({
@@ -537,5 +710,7 @@ try {
   await client.close();
   await rm(work, { recursive: true, force: true });
 }
+
+await rm(work0, { recursive: true, force: true });
 
 console.log("NOIZ LAB MCP server tests passed");

@@ -2,7 +2,7 @@
 // same logic can back a stdio server, a CLI, or a future Worker endpoint.
 
 import { existsSync } from "node:fs";
-import { mkdir } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, extname, join, resolve } from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -173,6 +173,145 @@ export function createProjectFromBrief(args = {}) {
     },
     missingAssets: plan.length,
     nextStep: `Add ${plan.length} assets, then call build_short_video with preset ${preset}.`,
+  };
+}
+
+// Builds the one style string appended to every prompt, so separately generated
+// cuts still look like they belong to the same piece. This is the whole point of
+// the style bible: consistency across generations, not per-cut prettiness.
+function styleSuffix(bible) {
+  return [
+    Array.isArray(bible?.texture) ? bible.texture.join(", ") : "",
+    bible?.lighting || "",
+    bible?.camera || "",
+    Array.isArray(bible?.palette) && bible.palette.length
+      ? `color palette ${bible.palette.join(" ")}`
+      : "",
+  ].filter(Boolean).join(", ").slice(0, 300);
+}
+
+/**
+ * generate_missing_assets
+ *
+ * Generates the cuts a storyboard calls for but has no file for, via a NOIZ LAB
+ * deployment's /api/assets (Workers AI). Images are written to outDir and added
+ * to the project as local assets, ready for build_short_video.
+ */
+export async function generateMissingAssets(args = {}) {
+  const project = args.project == null ? null : requireProject(args.project);
+  const endpoint = requireString(args.endpoint, "endpoint", { max: 2048 });
+  let url;
+  try { url = new URL(endpoint); }
+  catch { fail(`endpoint is not a valid URL: ${endpoint}`); }
+  if (!["http:", "https:"].includes(url.protocol)) fail("endpoint must be http or https");
+  const target = new URL("/api/assets", url).href;
+
+  const outDir = resolve(requireString(args.outDir, "outDir", { max: 2048 }));
+
+  // Prompts come either straight from the caller or from a storyboard's cuts.
+  let prompts;
+  let storyboard = null;
+  if (Array.isArray(args.prompts) && args.prompts.length) {
+    prompts = requireStringArray(args.prompts, "prompts", { maxItems: 8, maxLength: 500 });
+  } else if (args.storyboard != null) {
+    storyboard = normalizeStoryboard(args.storyboard, {
+      duration: project?.brief.duration ?? 0,
+      language: project?.brief.language ?? "ja",
+    });
+    prompts = storyboard.cuts.map((cut) => cut.imagePrompt || cut.shot).map((p) => p.trim());
+    if (prompts.some((p) => !p)) {
+      fail("every storyboard cut needs an imagePrompt (or a shot) to generate from");
+    }
+  } else {
+    fail("pass prompts, or a storyboard whose cuts carry imagePrompt");
+  }
+  if (!prompts.length) fail("nothing to generate");
+  if (prompts.length > 8) fail(`at most 8 assets per call; got ${prompts.length}`);
+
+  const bible = args.styleBible ?? project?.styleBible;
+  const style = requireString(args.style ?? styleSuffix(bible), "style", { max: 300, allowEmpty: true });
+  const negativePrompt = requireString(
+    args.negativePrompt ?? bible?.negativePrompt ?? "", "negativePrompt", { max: 300, allowEmpty: true },
+  );
+  const steps = requireNumber(args.steps, "steps", { min: 4, max: 8, fallback: 6 });
+
+  let res;
+  try {
+    res = await fetch(target, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ prompts, style, negativePrompt, steps }),
+      // Image generation is slow: eight cuts can take a couple of minutes.
+      signal: AbortSignal.timeout(requireNumber(args.timeoutMs, "timeoutMs", { min: 5000, max: 600_000, fallback: 300_000 })),
+    });
+  } catch (error) {
+    fail(`could not reach ${target}: ${error.message}`);
+  }
+  const text = await res.text();
+  if (!res.ok) fail(`${target} returned ${res.status}: ${text.slice(0, 200)}`);
+  let body;
+  try { body = JSON.parse(text); }
+  catch { fail(`${target} did not return JSON`); }
+  const generated = Array.isArray(body?.assets) ? body.assets : [];
+  if (!generated.length) fail(`${target} returned no assets`);
+
+  await mkdir(outDir, { recursive: true });
+  const written = [];
+  for (const asset of generated) {
+    const i = Number.isInteger(asset?.index) ? asset.index : written.length;
+    if (typeof asset?.data !== "string" || !asset.data) fail(`asset ${i} has no image data`);
+    const bytes = Buffer.from(asset.data, "base64");
+    if (!bytes.length) fail(`asset ${i} decoded to an empty file`);
+    // Trust the bytes over the label: providers do not always report the type
+    // they actually produced, and a .jpg holding PNG data breaks the renderer.
+    const png = bytes.length > 8 && bytes.subarray(0, 8)
+      .equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+    const mime = png ? "image/png" : "image/jpeg";
+    const path = join(outDir, `cut-${String(i + 1).padStart(2, "0")}.${png ? "png" : "jpg"}`);
+    await writeFile(path, bytes);
+    written.push({ index: i, path, prompt: asset.prompt ?? prompts[i], contentType: mime });
+  }
+  // Keep cuts in storyboard order regardless of what order the server replied in.
+  written.sort((a, b) => a.index - b.index);
+
+  // The server returns partial results rather than failing the batch, so the
+  // caller can retry just the cuts that did not come back.
+  const failures = (Array.isArray(body?.errors) ? body.errors : []).map((e) => ({
+    index: e?.index,
+    error: String(e?.error ?? "unknown"),
+    prompt: prompts[e?.index],
+  }));
+
+  if (!project) return { assets: written, failures, requested: prompts.length };
+
+  for (const asset of written) {
+    project.assets.push({
+      id: createAssetId(),
+      type: "generated-image",
+      name: asset.path.split("/").pop(),
+      mime: asset.contentType,
+      source: { kind: "local", ref: asset.path },
+      metadata: {},
+      generation: {
+        prompt: asset.prompt,
+        style,
+        negativePrompt,
+        steps,
+        // Same seed as the style bible: re-running should stay in the same look.
+        seed: project.styleBible.seed,
+        provider: target,
+      },
+    });
+  }
+
+  return {
+    project: touch(project),
+    assets: written,
+    failures,
+    requested: prompts.length,
+    nextStep: failures.length
+      ? `${failures.length}カット分が生成できませんでした。再実行するか、その分の素材を用意してください。`
+      : `build_short_video に${storyboard ? " storyboard と" : ""}このプロジェクトを渡してタイムラインを作ってください。`,
   };
 }
 

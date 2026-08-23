@@ -6,7 +6,8 @@ import { readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import {
   CONSTANTS, ToolError, applyStyleBible, buildShortVideo, createProjectFromBrief,
-  generateStoryboard, renderProject, reviewHookAndPacing, validateProjectTool,
+  generateMissingAssets, generateStoryboard, renderProject, reviewHookAndPacing,
+  validateProjectTool,
 } from "./tools.mjs";
 
 const SERVER_INFO = { name: "noiz-lab", title: "NOIZ LAB", version: "1.0.0" };
@@ -88,6 +89,34 @@ const TOOLS = [
       additionalProperties: false,
     },
     handler: generateStoryboard,
+  },
+  {
+    name: "generate_missing_assets",
+    title: "Generate missing assets",
+    description: "絵コンテのカットに対応する画像をCloudflare Workers AIで生成し、ファイルへ書き出してプロジェクトへ追加します。NOIZ LABのデプロイ先（endpoint）が必要です。1回につき最大8枚、数分かかります。",
+    inputSchema: {
+      type: "object",
+      required: ["endpoint", "outDir"],
+      properties: {
+        endpoint: { type: "string", maxLength: 2048, description: "NOIZ LABのURL。例: https://image-effector.example.workers.dev" },
+        outDir: { type: "string", maxLength: 2048, description: "生成した画像の保存先ディレクトリ" },
+        project: { ...projectSchema, description: "省略可。渡すと生成した画像を素材として追加します" },
+        storyboard: { type: "object", description: "generate_storyboard の結果。各カットの imagePrompt から生成します" },
+        prompts: {
+          type: "array",
+          maxItems: 8,
+          items: { type: "string", maxLength: 500 },
+          description: "storyboard の代わりに、生成したい画像のプロンプトを直接指定します（英語推奨。日本語はサーバー側で英訳されます）",
+        },
+        style: { type: "string", maxLength: 300, description: "全プロンプトへ共通で足す作風。省略時は styleBible から組み立てます" },
+        negativePrompt: { type: "string", maxLength: 300, description: "避けたい表現。省略時は styleBible のもの" },
+        steps: { type: "number", minimum: 4, maximum: 8, description: "生成ステップ数。既定は6" },
+        styleBible: { type: "object", description: "project を渡さない場合の作風指定" },
+        timeoutMs: { type: "number", minimum: 5000, maximum: 600000, description: "タイムアウト。既定は300000 (5分)" },
+      },
+      additionalProperties: false,
+    },
+    handler: generateMissingAssets,
   },
   {
     name: "apply_style_bible",
@@ -273,7 +302,7 @@ async function handleRequest(message) {
       protocolVersion: version,
       capabilities: { tools: { listChanged: false } },
       serverInfo: SERVER_INFO,
-      instructions: "NOIZ LAB のショート動画プロジェクトを組み立てます。create_project_from_brief で構成案を作り、generate_storyboard で絵コンテを起こし、build_short_video で素材を並べ、review_hook_and_pacing で確認してから render_project でMP4を書き出します。プロジェクトは各ツールの戻り値の project をそのまま次のツールへ渡してください。絵コンテはあなた自身が書いて storyboard に渡せます（バックエンド不要）。",
+      instructions: "NOIZ LAB のショート動画プロジェクトを組み立てます。create_project_from_brief で構成案を作り、generate_storyboard で絵コンテを起こし、素材が無ければ generate_missing_assets で生成し、build_short_video で素材を並べ、review_hook_and_pacing で確認してから render_project でMP4を書き出します。プロジェクトは各ツールの戻り値の project をそのまま次のツールへ渡してください。絵コンテはあなた自身が書いて storyboard に渡せます（バックエンド不要）。",
     });
     return;
   }

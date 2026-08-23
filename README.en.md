@@ -167,6 +167,7 @@ claude mcp add noiz-lab -- node /path/to/image_effector/mcp/server.mjs
 |---|---|
 | `create_project_from_brief` | Turn an objective, audience, duration and platform into a project plus a cut plan |
 | `generate_storyboard` | Write a storyboard with a hook, a middle and a close |
+| `generate_missing_assets` | Generate the images a storyboard calls for, via Workers AI |
 | `apply_style_bible` | Push colour, lighting, framing and a preset across every cut |
 | `build_short_video` | Lay assets onto the timeline with BPM-aware pacing and transitions |
 | `review_hook_and_pacing` | Check the hook, pacing, duration, captions and aspect ratio; return findings and a score |
@@ -183,13 +184,18 @@ to `build_short_video` and that pacing lands on the timeline as written.
 Pass the `project` from each result straight into the next tool:
 
 ```text
-create_project_from_brief → generate_storyboard → apply_style_bible
-  → build_short_video → review_hook_and_pacing → render_project
+create_project_from_brief → generate_storyboard → generate_missing_assets
+  → apply_style_bible → build_short_video → review_hook_and_pacing → render_project
 ```
 
-Asset generation (`generate_missing_assets`) and posting (`export_for_tiktok`) are not
-implemented. `render_project` currently handles only assets whose `source.kind` is
-`local`, up to 8 cuts, holding each 0.3–3s.
+`generate_missing_assets` generates the cuts a storyboard calls for from their
+`imagePrompt`, so it needs an `endpoint` (a Tier 2+ deployment) for Workers AI. It appends
+the same style-bible wording to every prompt, so separately generated cuts still look like
+one piece. Up to 8 images per call; a partial batch still returns what succeeded, so you
+can retry only the cuts that failed.
+
+Posting (`export_for_tiktok`) is not implemented. `render_project` currently handles only
+assets whose `source.kind` is `local`, up to 8 cuts, holding each 0.3–3s.
 
 Rendering is a multi-pass pipeline: source (＋ CPU pixel sort) → separable Gaussian
 blur → luminance extraction + blur (halation) → a final composite shader handling

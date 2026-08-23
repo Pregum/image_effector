@@ -725,6 +725,80 @@ async function sceneRoute(req, env, ai) {
   }
 }
 
+// Uint8Array -> base64。btoaは引数長に上限があるため分割して渡す
+function bytesToBase64(bytes) {
+  let s = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) {
+    s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  }
+  return btoa(s);
+}
+
+// 絵コンテの各カット向けに不足素材をまとめて生成する。
+// 1枚ずつ /api/generate を叩くのに比べ、スタイルバイブルの適用と予算判定を
+// 1リクエストにまとめられる。生成物はbase64で返し、保存先は呼び出し側が決める。
+const MAX_BATCH_ASSETS = 8;
+
+async function assetsRoute(req, env, ai) {
+  // 画像生成は重いので、1リクエストで最大8枚という上限に合わせて枠を絞る
+  if (!(await rateLimit(env, clientIp(req) + "#assets", 3))) {
+    return json({ error: "rate limited" }, 429);
+  }
+  let body;
+  try {
+    body = await req.json();
+  } catch {
+    return json({ error: "invalid json" }, 400);
+  }
+  const prompts = (Array.isArray(body?.prompts) ? body.prompts : [])
+    .filter((p) => typeof p === "string" && p.trim())
+    .slice(0, MAX_BATCH_ASSETS)
+    .map((p) => p.trim().slice(0, 500));
+  if (!prompts.length) return json({ error: "no prompts" }, 400);
+
+  // スタイルバイブルはカット間の一貫性のために全プロンプトへ同じ文言を足す
+  const style = typeof body?.style === "string" ? body.style.trim().slice(0, 300) : "";
+  const negative = typeof body?.negativePrompt === "string" ? body.negativePrompt.trim().slice(0, 300) : "";
+  const steps = Number(body?.steps) >= 4 && Number(body?.steps) <= 8 ? Number(body.steps) : 6;
+
+  // 翻訳(llm8b)は非ASCIIのプロンプトにだけ走るが、予算は安全側に多めで確保する
+  const cost = prompts.length * (AI_COST.image + AI_COST.llm8b);
+  if (!(await spendAiBudget(env, cost)).ok) return budgetExceeded();
+
+  const assets = [];
+  const errors = [];
+  for (const [i, raw] of prompts.entries()) {
+    try {
+      const translated = await translatePrompt(ai, raw);
+      const prompt = [translated, style].filter(Boolean).join(", ");
+      const out = await ai.image({
+        prompt: negative ? `${prompt} | negative: ${negative}` : prompt,
+        steps,
+      });
+      assets.push({
+        index: i,
+        prompt,
+        contentType: out.contentType,
+        data: bytesToBase64(out.bytes),
+      });
+    } catch (e) {
+      const msg = e?.message ?? String(e);
+      console.error(`asset ${i} failed:`, msg);
+      // 予算切れは以降も必ず失敗するので、そこで打ち切って部分結果を返す
+      if (msg.includes("4006") || msg.includes("neurons")) {
+        errors.push({ index: i, error: "quota exceeded" });
+        break;
+      }
+      errors.push({ index: i, error: "generation failed" });
+    }
+  }
+
+  // 1枚も作れなければ失敗として扱う。部分成功はそのまま返し、呼び出し側が
+  // 足りないカットだけ再試行できるようにする
+  if (!assets.length) return json({ error: "generation failed", errors }, 502);
+  return json({ assets, errors, requested: prompts.length });
+}
+
 // 企画(brief)から絵コンテを起こす。カットの役割・尺・画の指示・演出・つなぎを決める。
 // ここはJSONの設計だけを担当し、素材生成とタイムライン配置はクライアント/MCP側が行う。
 const STORYBOARD_SYSTEM = [
@@ -929,6 +1003,11 @@ export default {
       if (!authed(req, env)) return json({ error: "unauthorized" }, 401);
       const b = await spendAiBudget(env, 0);
       return json({ used: b.used, cap: b.cap, freeAllocation: 10000 });
+    }
+
+    if (pathname === "/api/assets" && req.method === "POST") {
+      if (!ai) return disabled("ai");
+      return tracked(env, req, "ai_assets", assetsRoute(req, env, ai));
     }
 
     if (pathname === "/api/storyboard" && req.method === "POST") {

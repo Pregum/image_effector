@@ -1,7 +1,7 @@
 // ネットワーク優先・キャッシュフォールバックのシンプルなSW。
 // キャッシュはオフライン時の保険にのみ使うため、デプロイ後の古い殻を配ることはない。
-const CACHE = "noizlab-shell-v2";
-const SHELL = ["/", "/style.css", "/app.js", "/project-format.js", "/manifest.json", "/icon-192.png", "/icon-512.png", "/og.png", "/about", "/about-en", "/about.css", "/i18n.js", "/analytics.js"];
+const CACHE = "noizlab-shell-v3";
+const SHELL = ["/", "/style.css", "/app.js", "/project-format.js", "/manifest.json", "/icon-192.png", "/icon-512.png", "/icon-1024.png", "/og.png", "/about", "/about-en", "/about.css", "/i18n.js", "/analytics.js"];
 
 self.addEventListener("install", (e) => {
   e.waitUntil(

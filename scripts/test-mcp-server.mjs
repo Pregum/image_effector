@@ -959,6 +959,69 @@ async function webAppWouldOpen(manifest) {
   // 中心座標は0-1へ収める（画面外を指すと何も出ない）
   const wild = connectParams("radial-wipe", { center: [9, -9] });
   assert.ok(wild[2] >= 0 && wild[2] <= 1 && wild[3] >= 0 && wild[3] <= 1, "中心は0-1に収める");
+
+  // --- match-cut ---
+  // 前後の注目点を重ねる技法なので、アンカーが u_connect とは別枠で渡る。
+  const anchorSrc = appSource3.match(/function anchorParams\([\s\S]*?\n\}/)?.[0];
+  const anchorPairSrc = appSource3.match(/function anchorPair\([\s\S]*?\n\}/)?.[0];
+  assert.ok(anchorSrc && anchorPairSrc, "anchorParams / anchorPair が見つからない");
+  const anchorParams = new Function(
+    `${numParamSrc2} ${anchorPairSrc} ${anchorSrc} return anchorParams;`)();
+
+  const an = anchorParams("match-cut", { sourceAnchor: [0.3, 0.62], targetAnchor: [0.72, 0.34] });
+  assert.deepEqual(an, [0.3, 0.62, 0.72, 0.34], "[source.xy, target.xy] の順で詰める");
+  // 指定が無ければ中央同士（ただの寄り引きになるが破綻はしない）
+  assert.deepEqual(anchorParams("match-cut", {}), [0.5, 0.5, 0.5, 0.5]);
+  // 他の技法では使わない
+  assert.deepEqual(anchorParams("track-matte", { sourceAnchor: [0.1, 0.1] }), [0.5, 0.5, 0.5, 0.5]);
+  // 画面外や壊れた値でもNaNを出さず、0-1に収める
+  for (const params of [
+    { sourceAnchor: [9, -9], targetAnchor: [0.5, 0.5] },
+    { sourceAnchor: null, targetAnchor: "x" },
+    { sourceAnchor: [null, undefined], targetAnchor: [NaN, NaN] },
+  ]) {
+    const out = anchorParams("match-cut", params);
+    assert.equal(out.length, 4);
+    for (const [i, v] of out.entries()) {
+      assert.ok(Number.isFinite(v) && v >= 0 && v <= 1, `anchor[${i}] が ${v}`);
+    }
+  }
+
+  // 切り替え式は t=0 で必ず0でなければならない。アンカー付近を先に切り替える
+  // 寄与を t と独立に加算すると、転換前から次カットが混ざる。
+  const fragSrc = appSource3.match(/const FRAG_TRANS = `([\s\S]*?)`;/)[1];
+  const mcLine = fragSrc.match(/float m = smoothstep\(0\.0, 1\.0, clamp\(t \* \(([^)]*)\)([^;]*)\);/);
+  assert.ok(mcLine, "match-cut の切り替え式が想定の形ではない（t を掛ける形に保つこと）");
+
+  // 絵コンテのアンカーがクリップの transitionOut.params へ渡ること
+  const mcBoard = await generateStoryboard({
+    project: createProjectFromBrief({ objective: "match", duration: 6 }).project,
+    storyboard: {
+      cuts: [
+        { purpose: "hook", duration: 3, transitionOut: "match-cut", anchor: [0.3, 0.62], imagePrompt: "a" },
+        { purpose: "cta", duration: 3, transitionOut: null, anchor: [0.72, 0.34], imagePrompt: "b" },
+      ],
+    },
+    duration: 6,
+  });
+  assert.deepEqual(mcBoard.storyboard.cuts[0].anchor, [0.3, 0.62]);
+  assert.deepEqual(mcBoard.storyboard.cuts[1].anchor, [0.72, 0.34]);
+
+  const mcBuilt = buildShortVideo({
+    project: mcBoard.project,
+    assets: frames.slice(0, 2).map((path) => ({ path })),
+    storyboard: mcBoard.storyboard,
+    duration: 6,
+  });
+  const mcClip = mcBuilt.project.timeline.tracks[0].clips[0];
+  assert.equal(mcClip.transitionOut.technique, "match-cut");
+  // source は自カット、target は次カットのアンカー。取り違えると合わない
+  assert.deepEqual(mcClip.transitionOut.params.sourceAnchor, [0.3, 0.62]);
+  assert.deepEqual(mcClip.transitionOut.params.targetAnchor, [0.72, 0.34]);
+  assert.deepEqual(validateProject(mcBuilt.project), { valid: true, errors: [] });
+
+  // match-cut もCLIでは描けないので渡さない
+  assert.ok(!cliList.includes("match-cut"), "match-cut をCLIへ渡してはいけない");
 }
 
 // --- JSON-RPC over stdio ----------------------------------------------------

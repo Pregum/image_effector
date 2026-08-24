@@ -14,11 +14,11 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const VARIETY_CLI = join(ROOT, "scripts/noizlab-variety-video.mjs");
 
 const PRESETS = ["RESET", "Y2K", "VHS", "DREAM", "PRINT", "PIXEL", "SORTED", "CINEMA", "FILM", "NEON"];
-// 後半3つはモーション文法の接続技法。Web版のUIボタンには出ず、
+// 後半4つはモーション文法の接続技法。Web版のUIボタンには出ず、
 // Project JSON（＝絵コンテやMCP）経由でのみ指定する。
 const TRANSITIONS = [
   "fade", "wipe", "dissolve", "glitch", "punch", "flash", "push", "film-burn",
-  "track-matte", "radial-wipe", "silhouette-match",
+  "track-matte", "radial-wipe", "silhouette-match", "match-cut",
 ];
 // 既存CLI(scripts/noizlab-variety-video.mjs)が --transitions で受け付ける範囲。
 // 接続技法はCLI側が知らないので、render_project では既定へ倒す。
@@ -481,7 +481,14 @@ export function buildShortVideo(args = {}) {
       transitionOut: last || !technique ? null : {
         technique,
         duration: transitionDuration,
-        params: {},
+        // match-cut は「前カットのどこ」と「次カットのどこ」を重ねるかが技法の
+        // 本体なので、絵コンテのアンカーを前後から取って渡す。無指定なら中央同士
+        // （その場合ただの寄り引きになるが、破綻はしない）。
+        params: technique === "match-cut" ? {
+          sourceAnchor: board?.anchor ?? [0.5, 0.5],
+          targetAnchor: storyboard?.cuts[i + 1]?.anchor ?? [0.5, 0.5],
+          tolerance: 0.3,
+        } : {},
       },
     });
     cursor += cutDuration;
@@ -544,6 +551,12 @@ function normalizeStoryboard(raw, { duration, language }) {
     const motion = MOTIONS.includes(cut?.motion) ? cut.motion : "orthographic-pullback";
     // 表面表現は任意。カメラの動きと重ねる質感なので、無ければ付けない
     const surface = SURFACES.includes(cut?.surface) ? cut.surface : null;
+    // カットの注目点。0-1の正規化座標で、match-cut のときに前後を突き合わせる。
+    // 指定が無ければ null にしておき、使う側で中央へ倒す。
+    const anchor = Array.isArray(cut?.anchor) && cut.anchor.length === 2
+      && Number.isFinite(Number(cut.anchor[0])) && Number.isFinite(Number(cut.anchor[1]))
+      ? [clamp(Number(cut.anchor[0]), 0, 1), clamp(Number(cut.anchor[1]), 0, 1)]
+      : null;
     // The final cut must not transition into nothing; every other cut must.
     const technique = TRANSITIONS.includes(cut?.transitionOut) ? cut.transitionOut : "fade";
     return {
@@ -555,6 +568,7 @@ function normalizeStoryboard(raw, { duration, language }) {
       preset,
       motion,
       surface,
+      anchor,
       transitionOut: last ? null : technique,
     };
   });

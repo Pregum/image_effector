@@ -185,7 +185,7 @@ The renderer draws the camera techniques from
 [Motion Grammar](docs/motion-grammar.md) — `orthographic-pullback`, `constant-linear`,
 `frame-echo`, `modular-grid` and `ken-burns`, plus the surface techniques `halftone` and
 `cmyk-misregistration`, which layer on top of a camera move (`role: "texture"`, up to two
-per cut). Connection techniques — `track-matte`, `radial-wipe` and `silhouette-match` —
+per cut). Connection techniques — `track-matte`, `radial-wipe`, `silhouette-match` and `match-cut` —
 ride on `transitionOut` rather than `motion[]`, and are specified through the project file
 rather than the UI buttons; note that only the web app draws them, so `render_project`
 (which drives the CLI) falls back and reports `unsupportedTransitions`. Any other

@@ -78,6 +78,9 @@ uniform vec4 u_surfB;
 // radial-wipe      x:direction y:startAngle zw:center
 // silhouette-match y:threshold
 uniform vec4 u_connect;
+// match-cut 用の追加パラメータ。xy:sourceAnchor zw:targetAnchor
+// （u_connect に4つ入りきらないため分けている。u_connect.y は tolerance）
+uniform vec4 u_anchor;
 float th(float n) { return fract(sin(n * 127.1 + u_seed2 * 311.7) * 43758.5453); }
 float th2(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7)) + u_seed2 * 17.0) * 43758.5453); }
 // 1カット分の画をモーション付きで取り出す。平行移動と拡大は全技法共通で、
@@ -247,6 +250,31 @@ void main() {
     o = mix(B, A, m);
     // 掃過する辺を薄く光らせる
     o.rgb += (1.0 - smoothstep(0.0, 0.035, abs(swept - t))) * 0.18;
+  } else if (u_mode == 11) {
+    // match-cut: 前カットの注目点(sourceAnchor)と次カットの注目点(targetAnchor)を
+    // 画面上で重ねながら切り替える。両方のカットを動かすのがマスク系との違いで、
+    // 「同じ形が受け渡された」ように見せるのが狙い。
+    vec2 srcA = u_anchor.xy;
+    vec2 dstA = u_anchor.zw;
+    // 合流点。ここへ両方のアンカーを寄せる
+    vec2 meet = mix(srcA, dstA, smoothstep(0.0, 1.0, t));
+    float ease = t * t * (3.0 - 2.0 * t);
+    // 前カットはアンカーを合流点へ運びつつ、わずかに寄る
+    float za = 1.0 + 0.14 * ease;
+    vec2 auv = (uv - meet) / za + srcA;
+    // 次カットは逆向き。引きながら定位置へ着地する
+    float zb = 1.0 + 0.14 * (1.0 - ease);
+    vec2 buv = (uv - meet) / zb + dstA;
+    vec4 ca = sA(clamp(auv, 0.0, 1.0));
+    vec4 cb = sB(clamp(buv, 0.0, 1.0));
+    // 切り替えはアンカー付近から始める。tolerance が広いほど画面全体で同時に変わる
+    float tol = max(0.05, u_connect.y);
+    float d = length((uv - meet) * vec2(u_res.x / max(u_res.y, 1.0), 1.0));
+    float local = smoothstep(tol * 1.6, tol * 0.2, d);
+    // アンカー付近を先に切り替えるが、寄与は t に比例させる。t と独立に加算すると
+    // t=0（まだ転換が始まっていない時点）でアンカー周辺に次カットが混ざる。
+    float m = smoothstep(0.0, 1.0, clamp(t * (1.5 + local * 0.9) - 0.25, 0.0, 1.0));
+    o = mix(ca, cb, m);
   } else {
     // silhouette-match: 前後の外形が似ているところでつなぐ。
     // 両カットの輝度マスクの一致度を見て、揃っている場所から先に入れ替える。
@@ -1409,6 +1437,24 @@ function surfaceAt(slide, p) {
 
 // 接続技法(track-matte / radial-wipe / silhouette-match)のパラメータ。
 // 技法ごとに意味が変わるので、詰め方はシェーダー側のコメントと対にしてある。
+// アンカー座標。0-1の正規化座標で、[x, y] の配列として受け取る。
+function anchorPair(value, fallback) {
+  const a = Array.isArray(value) ? value : [];
+  return [
+    Math.min(1, Math.max(0, numParam(a[0], fallback[0]))),
+    Math.min(1, Math.max(0, numParam(a[1], fallback[1]))),
+  ];
+}
+
+// match-cut は前後カットの注目点を渡すため、u_connect に収まらない。
+// 別ユニフォーム(u_anchor)へ [sourceAnchor, targetAnchor] を詰める。
+function anchorParams(technique, params = {}) {
+  if (technique !== "match-cut") return [0.5, 0.5, 0.5, 0.5];
+  const src = anchorPair(params.sourceAnchor, [0.5, 0.5]);
+  const dst = anchorPair(params.targetAnchor, [0.5, 0.5]);
+  return [src[0], src[1], dst[0], dst[1]];
+}
+
 function connectParams(technique, params = {}) {
   if (technique === "track-matte") {
     return [params.invert ? 1 : 0, Math.min(0.4, Math.max(0.01, numParam(params.feather, 0.08))), 0, 0];
@@ -1424,6 +1470,11 @@ function connectParams(technique, params = {}) {
   }
   if (technique === "silhouette-match") {
     return [0, Math.min(0.95, Math.max(0.05, numParam(params.threshold, 0.45))), 0, 0];
+  }
+  if (technique === "match-cut") {
+    // tolerance は「どれくらいの広さで同時に切り替わるか」。小さいほど
+    // アンカー付近から局所的に変わる
+    return [0, Math.min(0.9, Math.max(0.05, numParam(params.tolerance, 0.3))), 0, 0];
   }
   return [0, 0, 0, 0];
 }
@@ -1454,6 +1505,7 @@ function seqAt(elapsed, n, holdMs, transMs, zoomOn) {
         surfA: surfaceAt(slides[i], 1), surfB: surfaceAt(slides[i + 1], t),
         mode: modeIdx >= 0 ? modeIdx : seqState.mode,
         connect: modeIdx >= 0 ? connectParams(out.technique, out.params) : [0, 0, 0, 0],
+        anchor: modeIdx >= 0 ? anchorParams(out.technique, out.params) : [0.5, 0.5, 0.5, 0.5],
         zoomA: ma.scale, zoomB: mb.scale, localA: dur, localB: t * transMs,
       };
     }
@@ -1734,7 +1786,7 @@ const PROJECT_DB = "noiz-lab-projects";
 const UI_TRANSITION_COUNT = 8;
 const TRANSITION_TECHNIQUES = [
   "fade", "wipe", "dissolve", "glitch", "punch", "flash", "push", "film-burn",
-  "track-matte", "radial-wipe", "silhouette-match",
+  "track-matte", "radial-wipe", "silhouette-match", "match-cut",
 ];
 let activeProject = createProject();
 
@@ -2513,7 +2565,7 @@ async function exportGif() {
       seqFrame = {
         texA: slides[s.a].tex, texB: slides[s.b].tex,
         t: s.t, zoomA: s.zoomA, zoomB: s.zoomB, motA: s.motA, motB: s.motB,
-        surfA: s.surfA, surfB: s.surfB, mode: s.mode, connect: s.connect,
+        surfA: s.surfA, surfB: s.surfB, mode: s.mode, connect: s.connect, anchor: s.anchor,
       };
       seqOverride = overrideFor(s.a, s.b, s.t);
       render(tMs / 1000); // 仮想時刻。ウィンドウが隠れていても進む
@@ -3104,6 +3156,8 @@ function render(time) {
     gl.uniform1i(tu.u_mode, seqFrame.mode ?? seqState.mode);
     const cn = seqFrame.connect || [0, 0, 0, 0];
     gl.uniform4f(tu.u_connect, cn[0], cn[1], cn[2], cn[3]);
+    const an = seqFrame.anchor || [0.5, 0.5, 0.5, 0.5];
+    gl.uniform4f(tu.u_anchor, an[0], an[1], an[2], an[3]);
     gl.uniform2f(tu.u_res, W, H);
     gl.uniform1f(tu.u_seed2, sd);
     const mA = seqFrame.motA || { x: 0, y: 0, scale: seqFrame.zoomA, amount: 0, tech: 0 };
@@ -3206,6 +3260,7 @@ function frame() {
       surfB: s.surfB,
       mode: s.mode,
       connect: s.connect,
+      anchor: s.anchor,
     };
     seqOverride = overrideFor(s.a, s.b, s.t);
     dirty = true;
@@ -3237,6 +3292,7 @@ function frame() {
         surfB: s.surfB,
         mode: s.mode,
         connect: s.connect,
+        anchor: s.anchor,
       };
       seqOverride = overrideFor(s.a, s.b, s.t);
       dirty = true;

@@ -164,6 +164,9 @@ Web版のレンダラー（`public/app.js`）が実際に描けるのは、静�
 | `track-matte` | 前カットの明るい部分を入口に次の画を見せる | `feather`, `invert` |
 | `radial-wipe` | 中心・開始角・回転方向を持つ円形の転換 | `center`, `startAngle`, `direction` |
 | `silhouette-match` | 前後の外形が一致する場所から先に入れ替える | `threshold` |
+| `match-cut` | 前後カットの注目点を画面上で重ねながら渡す | `sourceAnchor`, `targetAnchor`, `tolerance` |
+
+`match-cut` は他の3つと違い、**両方のカットに変形をかけます**。前カットの `sourceAnchor` と次カットの `targetAnchor` を合流点へ寄せ、前カットは寄りながら、次カットは引きながら着地します。アンカーは各カットの `anchor`（0〜1の正規化座標）から取り、無指定なら中央同士になります（その場合ただの寄り引きになりますが破綻はしません）。`tolerance` は「どれくらいの広さで同時に切り替わるか」で、小さいほどアンカー付近から局所的に変わります。
 
 `track-matte` のしきい値は画の明るさの分布に合わせて正規化しています。輝度の絶対値で切ると、暗い画では大半が最後まで開かず終盤に急変するためです。
 

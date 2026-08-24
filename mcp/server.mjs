@@ -71,6 +71,13 @@ const TOOLS = [
                   preset: { enum: PRESETS },
                   motion: { enum: MOTIONS, description: "docs/motion-grammar.md の技法ID（カメラの動き）" },
                   surface: { enum: SURFACES, description: "質感を重ねる場合の技法。halftone は網点、cmyk-misregistration は版ズレ" },
+                  anchor: {
+                    type: "array",
+                    minItems: 2,
+                    maxItems: 2,
+                    items: { type: "number", minimum: 0, maximum: 1 },
+                    description: "このカットの注目点 [x, y]（0-1の正規化座標）。transitionOut が match-cut のとき、前カットのanchorと次カットのanchorを画面上で重ねます",
+                  },
                   transitionOut: { enum: [...TRANSITIONS, null], description: "最後のカットは null" },
                 },
               },

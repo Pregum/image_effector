@@ -2,3 +2,9 @@
 node_modules/
 .dev.vars
 .DS_Store
+
+# scripts/test-mcp-server.mjs の出力（out.* と、その隣に作られる assets/）。
+# リポジトリ直下に限定して無視する（public/**/assets/ を巻き込まないため）
+/out.mp4
+/out.webm
+/assets/

@@ -3,6 +3,64 @@
 このプロジェクトの主な変更点を記録します。
 *Notable changes to this project. English summary follows the Japanese section of each release.*
 
+## [1.1.0] — 2026-08-31
+
+Webのエディタに加えて、**エージェントやコマンドラインから扱える制作環境**が加わりました。
+JSONのプロジェクト形式を共通の器にすることで、CLI・MCP・Web版が同じ作品を行き来できます。
+
+### エージェント向けのインターフェース
+- 可搬なプロジェクト形式（`schemas/project.schema.json` / `public/project-format.js`）。
+  カット・エフェクト・モーション・トランジションをJSONで表現し、
+  MCPで作ったプロジェクトをWeb版でそのまま開ける
+- MCPサーバー（`mcp/`）から企画・編集・レビュー・書き出しを操作できるツール群:
+  `create_project_from_brief` / `generate_storyboard` / `generate_missing_assets` /
+  `apply_style_bible` / `build_short_video` / `render_project` /
+  `review_hook_and_pacing` / `read_project` / `write_project` / `validate_project`
+- コマンドラインからエフェクト適用と動画書き出しを行うCLI（`scripts/noizlab-effect.mjs`、
+  `scripts/noizlab-variety-video.mjs`）と、macOSのウィンドウを収録する補助スクリプト
+- Claude Code / エージェント向けのスキル `noiz-lab-effects` を同梱
+
+### AIによる制作支援
+- AI絵コンテ生成（`POST /api/storyboard`）。企画文からカット構成を組み立てる
+- 不足素材のAI生成（`POST /api/assets`）。絵コンテに対して足りないカットだけを補う
+
+### モーション文法
+カットの動きを語彙として定義し（`docs/motion-grammar.md`）、レンダラーで実装しました。
+
+- カメラ系5種 — `orthographic-pullback` / `constant-linear` / `frame-echo` /
+  `modular-grid` / `ken-burns`
+- 表面表現2種 — `halftone`（網点）/ `cmyk-misregistration`（版ズレ）。カメラ系に重ねられる
+- 接続技法4種 — `track-matte` / `radial-wipe` / `silhouette-match` / `match-cut`
+
+### その他
+- アイコンをNマークに刷新し、faviconと統一（1024pxを追加）
+- 利用状況の匿名計測（Cookieや識別IDを使わず、機能名のみ。バインディングが無ければ無効）
+- 説明ページの記述を計測の実態に合わせて修正
+
+---
+
+### English summary
+
+Beyond the web editor, NOIZ LAB now has an **agent- and CLI-facing production
+environment**. A JSON project format acts as the shared container, so the CLI, the MCP
+server and the web app can all hand the same piece back and forth.
+
+- **Portable project format** — cuts, effects, motion and transitions expressed as JSON;
+  a project built over MCP opens directly in the web app.
+- **MCP server** with tools for planning, editing, review and export
+  (`create_project_from_brief`, `generate_storyboard`, `generate_missing_assets`,
+  `apply_style_bible`, `build_short_video`, `render_project`, `review_hook_and_pacing`,
+  and read/write/validate).
+- **CLI** for applying effects and exporting videos, plus a helper that records a macOS
+  window, and a bundled `noiz-lab-effects` skill for agents.
+- **AI assistance** — storyboard generation (`POST /api/storyboard`) and generation of
+  only the assets a storyboard is missing (`POST /api/assets`).
+- **Motion grammar** (`docs/motion-grammar.md`) implemented in the renderer: five camera
+  techniques, two surface techniques (halftone, CMYK misregistration) that layer on top,
+  and four connection techniques including match-cut.
+- Icon refreshed to the N mark; anonymous, ID-free usage counting that disables itself
+  when the binding is absent.
+
 ## [1.0.0] — 2026-08-20
 
 最初の公開リリース。ブラウザだけで完結する画像エフェクトツールとして、

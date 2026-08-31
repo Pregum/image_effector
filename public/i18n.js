@@ -33,6 +33,9 @@ const EN = {
   "Xでシェア（ギャラリーがある構成では、加工後の画像がカードに出る共有リンクで投稿します）":
     "Share on X (with a gallery backend, posts a share link whose card shows the edited image)",
   "共有リンク作成中…": "Creating share link…",
+  "キー設定で画像付き": "Set a key for image cards",
+  "アクセスキーを設定すると、次からは加工後の画像がカードに出る共有リンクで投稿できます。":
+    "Set an access key and the next share will post a link whose card shows the edited image.",
   "共有リンク失敗": "Share link failed",
   "NOIZ LAB で画像にエフェクトをかけた🎛️": "Made this with NOIZ LAB 🎛️",
   "コピーしました ✓": "Copied ✓",
@@ -66,6 +69,11 @@ const EN = {
   "ドット": "Dot",
   "ゴシック": "Sans",
   "等幅": "Mono",
+  "極太": "Heavy",
+  "明朝": "Mincho",
+  "丸ゴ": "Round",
+  "ポップ": "Pop",
+  "レゲエ": "Reggae",
   "白": "White",
   "黒": "Black",
   "蛍光": "Neon",

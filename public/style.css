@@ -523,6 +523,19 @@ input[type="range"]::-moz-range-thumb {
   color: var(--acid);
   border-color: var(--acid);
 }
+
+/* 書体の選択肢は、その書体自身で描いて見分けられるようにする。
+   8つあって1行に収まらないので折り返す（app.js の TEXT_FONTS と同じ並び） */
+.seg-font { flex-wrap: wrap; }
+.seg-font button { flex: 1 1 22%; font-size: 12px; padding: 5px 2px; }
+.seg-font button[data-font="0"] { font-family: "DotGothic16", monospace; }
+.seg-font button[data-font="1"] { font-family: "Zen Kaku Gothic New", sans-serif; font-weight: 500; }
+.seg-font button[data-font="2"] { font-family: "IBM Plex Mono", monospace; font-weight: 600; }
+.seg-font button[data-font="3"] { font-family: "Zen Kaku Gothic New", sans-serif; font-weight: 900; }
+.seg-font button[data-font="4"] { font-family: "Shippori Mincho", serif; font-weight: 800; }
+.seg-font button[data-font="5"] { font-family: "Zen Maru Gothic", sans-serif; font-weight: 900; }
+.seg-font button[data-font="6"] { font-family: "RocknRoll One", sans-serif; }
+.seg-font button[data-font="7"] { font-family: "Reggae One", cursive; }
 .dice {
   margin-top: 8px;
   font-family: var(--font-dot);

@@ -1056,10 +1056,17 @@ window.addEventListener("paste", (e) => {
 
 const TEXT_DEFAULTS = { str: "", size: 0.12, x: 0.5, y: 0.82, color: 0, font: 0 };
 const textState = { ...TEXT_DEFAULTS };
+// [weight, family]。index.html の text-font-seg のボタン順と、
+// Google Fonts の読み込み指定（index.html の <link>）と揃えること
 const TEXT_FONTS = [
   ["400", "'DotGothic16', monospace"],
   ["700", "'Zen Kaku Gothic New', sans-serif"],
   ["700", "'IBM Plex Mono', monospace"],
+  ["900", "'Zen Kaku Gothic New', sans-serif"],
+  ["800", "'Shippori Mincho', serif"],
+  ["900", "'Zen Maru Gothic', sans-serif"],
+  ["400", "'RocknRoll One', sans-serif"],
+  ["400", "'Reggae One', cursive"],
 ];
 const TEXT_COLORS = ["#ffffff", "#0b0d0c", "#c8ff00", "#ff3ea5"];
 
@@ -2681,6 +2688,10 @@ shareBtn.addEventListener("click", async () => {
   const win = window.open("", "_blank");
   let url = buildRecipeUrl();
   let withImage = false;
+  // 画像そのものをカードに出すには作品を保存する必要があり、保存にはアクセスキーが要る。
+  // キーが無いまま黙ってレシピURLを投稿すると「共有したのに画像が出ない」ことになるので、
+  // 理由が分かるようにボタンで知らせる（投稿自体は従来どおり行う）
+  const needsKey = FEATURES.gallery && originalData && !galleryKey();
   if (FEATURES.gallery && galleryKey() && originalData) {
     shareBtn.disabled = true;
     shareBtn.textContent = t("共有リンク作成中…");
@@ -2693,6 +2704,13 @@ shareBtn.addEventListener("click", async () => {
     if (!withImage) {
       setTimeout(() => { shareBtn.textContent = t("𝕏 シェア"); }, 1800);
     }
+  }
+  if (needsKey) {
+    // 保存が401のときと同じ導線。キー入力欄はギャラリーの中にある
+    shareBtn.textContent = t("キー設定で画像付き");
+    setTimeout(() => { shareBtn.textContent = t("𝕏 シェア"); }, 2400);
+    openGallery();
+    setGalleryNote("アクセスキーを設定すると、次からは加工後の画像がカードに出る共有リンクで投稿できます。");
   }
   track("share", withImage ? "image" : "url");
   const intent =

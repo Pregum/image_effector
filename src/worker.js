@@ -277,9 +277,17 @@ async function handleGenerate(req, env, ai) {
 
   try {
     const out = await ai.image({ prompt: p, steps: 6 });
-    return new Response(out.bytes, {
-      headers: { "content-type": out.contentType, "cache-control": "no-store" },
-    });
+    // アクセスキーが無くてもシェアできるように、生成した画像だけを共有用に置いておく。
+    // 置けなくても生成自体は成功させる（共有できないだけ）
+    let shareId = null;
+    try {
+      shareId = await putAiShare(env, out.bytes, out.contentType, prompt.trim());
+    } catch (e) {
+      console.error("ai share put failed:", e?.message ?? String(e));
+    }
+    const headers = { "content-type": out.contentType, "cache-control": "no-store" };
+    if (shareId) headers["x-share-id"] = shareId;
+    return new Response(out.bytes, { headers });
   } catch (e) {
     const msg = e?.message ?? String(e);
     console.error("generation failed:", msg);
@@ -519,28 +527,11 @@ async function shareImage(env, id, meta) {
   };
 }
 
-async function sharePage(id, meta, origin, env) {
-  const noStore = { "content-type": "text/html; charset=utf-8", "cache-control": "private, no-store" };
-  if (!meta) {
-    return new Response(
-      `<!doctype html><meta charset="utf-8"><title>共有リンクの期限切れ — NOIZ LAB</title>` +
-      `<meta name="viewport" content="width=device-width,initial-scale=1">` +
-      `<style>body{background:#0b0d0c;color:#e8e6df;font-family:system-ui,sans-serif;display:grid;place-items:center;min-height:100vh;margin:0;padding:24px;text-align:center;line-height:1.9}a{color:#c8ff00}</style>` +
-      `<div><h1 style="font-size:20px">この共有リンクは期限切れです</h1>` +
-      `<p style="color:#8b917e;font-size:14px">共有リンクは作成から約1日で自動的に無効になります。<br>` +
-      `もう一度見るには、共有した人にリンクを作り直してもらってください。</p>` +
-      `<p><a href="${esc(origin)}/">NOIZ LAB を開く</a></p></div>`,
-      { status: 410, headers: noStore }
-    );
-  }
-  // captionはLLaVA生成の内部データなので公開ページには出さない
-  const title = meta.prompt || "NOIZ LAB の作品";
-  const desc = "NOIZ LAB で作った画像。リンクは約1日で失効します。";
-  const shareUrl = `${origin}/w/${id}`;
-  const pic = await shareImage(env, id, meta);
-  const img = origin + pic.path;
-  const remainH = Math.max(1, Math.round((meta.shared_until - Date.now()) / 3600000));
-  return new Response(
+// 共有ページのHTML。作品の共有(/w/)とAI生成画像の共有(/s/)で見た目とOGPを揃える。
+// width/height が分からないときは省く（実寸と食い違うとカードが崩れるため）
+function sharePageHtml({ title, desc, shareUrl, img, imgType, width, height, origin, editHref, editLabel, remainH }) {
+  const sized = Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0;
+  return (
     `<!doctype html><html lang="ja"><head><meta charset="utf-8">` +
     `<meta name="viewport" content="width=device-width,initial-scale=1">` +
     `<title>${esc(title)} — NOIZ LAB</title>` +
@@ -552,12 +543,12 @@ async function sharePage(id, meta, origin, env) {
     `<meta property="og:url" content="${esc(shareUrl)}">` +
     `<meta property="og:title" content="${esc(title)}">` +
     `<meta property="og:description" content="${esc(desc)}">` +
-    // 画像そのものがカードに出るように、加工後の画像を絶対URLで指す。
+    // 画像そのものがカードに出るように絶対URLで指す。
     // 幅・高さ・MIMEを添えるとクローラが取得前にカードを組み立てられる
     `<meta property="og:image" content="${esc(img)}">` +
-    `<meta property="og:image:type" content="${esc(pic.type)}">` +
-    `<meta property="og:image:width" content="${pic.width}">` +
-    `<meta property="og:image:height" content="${pic.height}">` +
+    `<meta property="og:image:type" content="${esc(imgType)}">` +
+    (sized ? `<meta property="og:image:width" content="${width}">` : "") +
+    (sized ? `<meta property="og:image:height" content="${height}">` : "") +
     `<meta property="og:image:alt" content="${esc(title)}">` +
     `<meta name="twitter:card" content="summary_large_image">` +
     `<meta name="twitter:title" content="${esc(title)}">` +
@@ -583,13 +574,160 @@ async function sharePage(id, meta, origin, env) {
     `</style></head><body><main>` +
     `<a class="logo" href="${esc(origin)}/">NOIZ LAB</a>` +
     `<h1>${esc(title)}</h1>` +
-    `<img src="${esc(img)}" width="${pic.width}" height="${pic.height}" alt="${esc(title)}">` +
+    `<img src="${esc(img)}"${sized ? ` width="${width}" height="${height}"` : ""} alt="${esc(title)}">` +
     `<div class="meta">` +
-    `<a class="btn" href="${esc(origin)}/#w=${esc(id)}">この作品をエディタで開く</a>` +
+    `<a class="btn" href="${esc(editHref)}">${esc(editLabel)}</a>` +
     `<span class="expiry">この共有リンクは残り約${remainH}時間で失効します</span>` +
-    `</div></main></body></html>`,
-    { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "public, max-age=300" } }
+    `</div></main></body></html>`
   );
+}
+
+const SHARE_PAGE_HEADERS = { "content-type": "text/html; charset=utf-8", "cache-control": "public, max-age=300" };
+
+function expiredPage(origin) {
+  return new Response(
+    `<!doctype html><meta charset="utf-8"><title>共有リンクの期限切れ — NOIZ LAB</title>` +
+    `<meta name="viewport" content="width=device-width,initial-scale=1">` +
+    `<style>body{background:#0b0d0c;color:#e8e6df;font-family:system-ui,sans-serif;display:grid;place-items:center;min-height:100vh;margin:0;padding:24px;text-align:center;line-height:1.9}a{color:#c8ff00}</style>` +
+    `<div><h1 style="font-size:20px">この共有リンクは期限切れです</h1>` +
+    `<p style="color:#8b917e;font-size:14px">共有リンクは作成から約1日で自動的に無効になります。<br>` +
+    `もう一度見るには、共有した人にリンクを作り直してもらってください。</p>` +
+    `<p><a href="${esc(origin)}/">NOIZ LAB を開く</a></p></div>`,
+    { status: 410, headers: { "content-type": "text/html; charset=utf-8", "cache-control": "private, no-store" } }
+  );
+}
+
+async function sharePage(id, meta, origin, env) {
+  if (!meta) return expiredPage(origin);
+  // captionはLLaVA生成の内部データなので公開ページには出さない
+  const title = meta.prompt || "NOIZ LAB の作品";
+  const pic = await shareImage(env, id, meta);
+  return new Response(
+    sharePageHtml({
+      title,
+      desc: "NOIZ LAB で作った画像。リンクは約1日で失効します。",
+      shareUrl: `${origin}/w/${id}`,
+      img: origin + pic.path,
+      imgType: pic.type,
+      width: pic.width,
+      height: pic.height,
+      origin,
+      editHref: `${origin}/#w=${id}`,
+      editLabel: "この作品をエディタで開く",
+      remainH: Math.max(1, Math.round((meta.shared_until - Date.now()) / 3600000)),
+    }),
+    { headers: SHARE_PAGE_HEADERS }
+  );
+}
+
+// ---- AI生成画像の共有（アクセスキー不要）
+//
+// ギャラリーへの保存はアクセスキーが要るため、キーを持たない人がシェアを押すと
+// レシピURLしか投稿できず、カードに画像が出せなかった。
+// そこで /api/generate が作った画像そのものだけを、約1日で失効する形で置いておく。
+// ブラウザからのアップロードは一切受け付けないので、任意の画像をドメイン上に
+// 置かれることはない。裏を返すと、カードに出るのはエフェクトをかける前の絵になる。
+
+// og:image:width/height に実寸を書くためだけの最小限のヘッダ解析。
+// 読めなければ null を返し、幅・高さを省いたカードにする
+function imageSize(bytes, contentType) {
+  try {
+    const d = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+    if (contentType === "image/png" || (d[0] === 0x89 && d[1] === 0x50)) {
+      const v = new DataView(d.buffer, d.byteOffset, d.byteLength);
+      // 8バイトのシグネチャ + 長さ4 + "IHDR"4 のあとに幅・高さが並ぶ
+      if (d.byteLength > 24) return { width: v.getUint32(16), height: v.getUint32(20) };
+      return null;
+    }
+    // JPEG: SOF0/1/2 セグメントの中に高さ・幅がこの順で入っている
+    let i = 2;
+    const v = new DataView(d.buffer, d.byteOffset, d.byteLength);
+    while (i + 9 < d.byteLength) {
+      if (d[i] !== 0xff) return null;
+      const marker = d[i + 1];
+      const len = v.getUint16(i + 2);
+      if (marker === 0xc0 || marker === 0xc1 || marker === 0xc2) {
+        return { width: v.getUint16(i + 7), height: v.getUint16(i + 5) };
+      }
+      i += 2 + len;
+    }
+  } catch { /* 壊れていても共有自体は続ける */ }
+  return null;
+}
+
+const aiShareKey = (id) => `shares/${id}`;
+
+// 生成した画像を置いて共有IDを返す。R2が無い構成では何もしない
+async function putAiShare(env, bytes, contentType, prompt) {
+  if (!env.IMAGES) return null;
+  const id = crypto.randomUUID();
+  const size = imageSize(bytes, contentType);
+  await env.IMAGES.put(aiShareKey(id), bytes, {
+    httpMetadata: { contentType },
+    // 期限や実寸はR2のメタデータに持たせる（D1のスキーマ変更を避けるため）
+    customMetadata: {
+      until: String(Date.now() + SHARE_TTL_MS),
+      prompt: (prompt || "").slice(0, 200),
+      w: String(size?.width ?? 0),
+      h: String(size?.height ?? 0),
+    },
+  });
+  return id;
+}
+
+// 期限内なら中身を返す。切れていたらその場で消す（定期実行が無いので遅延削除）
+async function getAiShare(env, id, bodyToo) {
+  if (!env.IMAGES) return null;
+  const obj = bodyToo ? await env.IMAGES.get(aiShareKey(id)) : await env.IMAGES.head(aiShareKey(id));
+  if (!obj) return null;
+  const until = Number(obj.customMetadata?.until) || 0;
+  if (until <= Date.now()) {
+    await env.IMAGES.delete(aiShareKey(id)).catch(() => {});
+    return null;
+  }
+  return {
+    obj,
+    until,
+    prompt: obj.customMetadata?.prompt || "",
+    width: Number(obj.customMetadata?.w) || 0,
+    height: Number(obj.customMetadata?.h) || 0,
+    type: obj.httpMetadata?.contentType || "image/jpeg",
+  };
+}
+
+async function aiSharePage(env, id, origin) {
+  const info = await getAiShare(env, id, false);
+  if (!info) return expiredPage(origin);
+  const remain = Math.floor((info.until - Date.now()) / 1000);
+  return new Response(
+    sharePageHtml({
+      title: info.prompt || "NOIZ LAB で生成した画像",
+      desc: "NOIZ LAB のAI生成でつくった画像。リンクは約1日で失効します。",
+      shareUrl: `${origin}/s/${id}`,
+      img: `${origin}/api/shares/${id}/image`,
+      imgType: info.type,
+      width: info.width,
+      height: info.height,
+      origin,
+      editHref: `${origin}/`,
+      editLabel: "NOIZ LAB を開く",
+      remainH: Math.max(1, Math.round(remain / 3600)),
+    }),
+    { headers: SHARE_PAGE_HEADERS }
+  );
+}
+
+async function aiShareImage(env, id) {
+  const info = await getAiShare(env, id, true);
+  if (!info) return json({ error: "not found" }, 404);
+  const remain = Math.floor((info.until - Date.now()) / 1000);
+  return new Response(info.obj.body, {
+    headers: {
+      "content-type": info.type,
+      // 共有期限を超えてキャッシュに残らないようにする
+      "cache-control": `public, max-age=${Math.min(Math.max(remain, 0), 3600)}`,
+    },
+  });
 }
 
 async function deleteWork(req, env, id) {
@@ -1035,6 +1173,16 @@ export default {
       trackEvent(env, req, "share_view", meta ? "ok" : "expired");
       return decorateHtml(await sharePage(sm[1], meta, url.origin, env), url.origin, env);
     }
+
+    // AI生成画像の共有ページ（約1日で失効・アクセスキー不要）
+    const asm = pathname.match(/^\/s\/([0-9a-f-]{36})$/);
+    if (asm && req.method === "GET") {
+      const page = await aiSharePage(env, asm[1], url.origin);
+      trackEvent(env, req, "share_view", page.status === 410 ? "expired" : "ai");
+      return decorateHtml(page, url.origin, env);
+    }
+    const asi = pathname.match(/^\/api\/shares\/([0-9a-f-]{36})\/image$/);
+    if (asi && req.method === "GET") return aiShareImage(env, asi[1]);
 
     const m = pathname.match(/^\/api\/works\/([0-9a-f-]{36})(?:\/(source|thumb|og|embed|share|meta))?$/);
     if (m) {

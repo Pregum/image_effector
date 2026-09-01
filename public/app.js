@@ -2661,6 +2661,9 @@ if (langBtn) {
 // サイト共通の画像しか出ない。ギャラリーが使える構成では作品を保存して
 // 共有リンク(/w/<id>)を投稿し、加工後の画像そのものをカードに出す。
 let lastShare = null; // { key, id, until } 直前に作った共有リンク
+// AI生成した画像の共有リンク。Workerが生成画像そのものを置いているので
+// アクセスキーが無くても投稿できる。ただしカードに出るのは加工前の絵
+let aiShare = null; // { id, gen }
 
 async function shareLinkForCurrent() {
   // レシピと元画像が同じなら、直前に作った共有リンクを使い回す（連打で作品が増えないように）
@@ -2691,7 +2694,8 @@ shareBtn.addEventListener("click", async () => {
   // 画像そのものをカードに出すには作品を保存する必要があり、保存にはアクセスキーが要る。
   // キーが無いまま黙ってレシピURLを投稿すると「共有したのに画像が出ない」ことになるので、
   // 理由が分かるようにボタンで知らせる（投稿自体は従来どおり行う）
-  const needsKey = FEATURES.gallery && originalData && !galleryKey();
+  const canUseAiShare = !!aiShare && aiShare.gen === sourceGen;
+  const needsKey = FEATURES.gallery && originalData && !galleryKey() && !canUseAiShare;
   if (FEATURES.gallery && galleryKey() && originalData) {
     shareBtn.disabled = true;
     shareBtn.textContent = t("共有リンク作成中…");
@@ -2704,6 +2708,11 @@ shareBtn.addEventListener("click", async () => {
     if (!withImage) {
       setTimeout(() => { shareBtn.textContent = t("𝕏 シェア"); }, 1800);
     }
+  }
+  // キーが無くてもAI生成画像なら、生成時に置かれた共有リンクを投稿する
+  if (!withImage && canUseAiShare) {
+    url = `${location.origin}/s/${aiShare.id}`;
+    withImage = true;
   }
   if (needsKey) {
     // 保存が401のときと同じ導線。キー入力欄はギャラリーの中にある
@@ -2762,8 +2771,12 @@ async function generate() {
       return;
     }
     if (!res.ok) throw new Error(`status ${res.status}`);
+    const shareId = res.headers.get("x-share-id");
     const blob = await res.blob();
     await loadBlob(blob);
+    // Workerが生成画像を共有用に置いてくれた場合、アクセスキー無しでもシェアできる。
+    // 元画像が差し替わったら使わない（sourceGen で判定）
+    aiShare = shareId ? { id: shareId, gen: sourceGen } : null;
     setNote("生成完了。エフェクトをかけてみてください。");
   } catch {
     setNote("生成に失敗しました。少し待って再試行してください。", true);

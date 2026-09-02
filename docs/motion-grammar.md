@@ -150,6 +150,18 @@ Web版のレンダラー（`public/app.js`）が実際に描けるのは、静�
 | `modular-grid` | セルごとに位相をずらし、拍で秩序へ戻す | `sequence` |
 | `ken-burns` | 寄り／引き（Web版の既定） | `direction`, `amount` |
 
+変形技法（形と意味の変換）も静止画1枚から作れる範囲で実装しています。
+輪郭データや第2の図形を持たないため、**画そのものの明暗と階調を使って**変形・置換を表現します。
+
+| 技法 | 描画 | 主に効くパラメータ |
+|---|---|---|
+| `style-transformation` | 構図と主役はそのままに、画材・質感だけを `fromStyle` から `toStyle` へ移す | `fromStyle`, `toStyle`（`photo` / `print` / `mono` / `poster`） |
+| `shape-morph` | 輝度の勾配方向へ輪郭を押し出し、カット終盤で収める | `amount`, `easing`（`linear` で等速） |
+| `graphic-substitution` | `swapFrame` を境に、写真から階調を落としたフラットな図形へ置き換える（位置と構図は保つ） | `swapFrame`（0〜1） |
+
+いずれも対応点や差し替え先の図形を外から与える指定（`paths`, `correspondence`, `from`, `to`, `anchor`）は
+まだ受け取れません。Project JSONには残るので、将来それらを扱う実装に差し替えられます。
+
 表面表現（`role: "texture"`）はカメラ系の動きへ重ねられます。1カットにつき0〜2つまでで、`primary` とは別枠です。
 
 | 技法 | 描画 | 主に効くパラメータ |

@@ -68,7 +68,11 @@ uniform float u_seed2;
 uniform vec4 u_motA;   // xy:offset z:scale w:amount
 uniform vec4 u_motB;
 uniform int u_techA;   // 0:none/ken-burns 1:frame-echo 2:modular-grid
+                       // 3:style-transformation 4:shape-morph 5:graphic-substitution
 uniform int u_techB;
+// 変形技法の追加パラメータ。x:変換元の様式 y:変換先の様式 z:進行度/置換タイミング w:予備
+uniform vec4 u_xfA;
+uniform vec4 u_xfB;
 // 表面表現(role:texture)。カメラの動きへ重ねる。
 // x: 0:none 1:halftone 2:cmyk-misregistration, y:強度, z:周波数/ずれ量, w:角度
 uniform vec4 u_surfA;
@@ -83,10 +87,54 @@ uniform vec4 u_connect;
 uniform vec4 u_anchor;
 float th(float n) { return fract(sin(n * 127.1 + u_seed2 * 311.7) * 43758.5453); }
 float th2(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7)) + u_seed2 * 17.0) * 43758.5453); }
+// 画材・質感の様式。style-transformation が この間を行き来する。
+// 0:写真そのまま 1:印刷 2:モノクロ 3:ポスター
+vec3 styleLook(vec3 c, int code) {
+  float l = dot(c, vec3(0.299, 0.587, 0.114));
+  if (code == 1) return mix(vec3(0.955, 0.945, 0.915), c * 0.85, smoothstep(0.05, 0.85, l));
+  if (code == 2) return vec3(clamp((l - 0.5) * 1.35 + 0.5, 0.0, 1.0));
+  if (code == 3) return floor(c * 4.0 + 0.5) / 4.0;
+  return c;
+}
+
+// 図形置換で使うフラットな図形形。階調を落として面と輪郭だけにする
+vec3 graphicForm(vec3 c) {
+  vec3 flat3 = floor(c * 3.0 + 0.5) / 3.0;
+  float l = dot(c, vec3(0.299, 0.587, 0.114));
+  // 暗部を締めて輪郭を立てる（記号として読めるように）
+  return flat3 * (0.35 + 0.65 * smoothstep(0.18, 0.55, l));
+}
+
 // 1カット分の画をモーション付きで取り出す。平行移動と拡大は全技法共通で、
 // 技法ごとの効果はその上に重ねる。
-vec4 motionSampleRaw(sampler2D tex, vec2 p, vec4 mot, int tech) {
+vec4 motionSampleRaw(sampler2D tex, vec2 p, vec4 mot, int tech, vec4 xf) {
   vec2 uv = clamp(0.5 + (p - 0.5) / mot.z - mot.xy, 0.0, 1.0);
+  if (tech == 4) {
+    // shape-morph: 輝度の勾配方向へ押し出して輪郭を変形させる。
+    // 対応点データが無いので、画そのものの形（明暗の境目）を動かす。
+    float e = 1.5 / u_res.x;
+    float lxp = dot(texture(tex, clamp(uv + vec2(e, 0.0), 0.0, 1.0)).rgb, vec3(0.299, 0.587, 0.114));
+    float lxm = dot(texture(tex, clamp(uv - vec2(e, 0.0), 0.0, 1.0)).rgb, vec3(0.299, 0.587, 0.114));
+    float lyp = dot(texture(tex, clamp(uv + vec2(0.0, e), 0.0, 1.0)).rgb, vec3(0.299, 0.587, 0.114));
+    float lym = dot(texture(tex, clamp(uv - vec2(0.0, e), 0.0, 1.0)).rgb, vec3(0.299, 0.587, 0.114));
+    vec2 grad = vec2(lxp - lxm, lyp - lym);
+    uv = clamp(uv + grad * mot.w * 0.12, 0.0, 1.0);
+    return texture(tex, uv);
+  }
+  if (tech == 5) {
+    // graphic-substitution: 置換タイミング(xf.z)を境に、写真から図形へ入れ替える。
+    // 位置と構図は保ったまま、見え方だけが記号側へ移る。
+    vec4 c = texture(tex, uv);
+    float swap = smoothstep(xf.z - 0.04, xf.z + 0.04, mot.w);
+    return vec4(mix(c.rgb, graphicForm(c.rgb), swap), c.a);
+  }
+  if (tech == 3) {
+    // style-transformation: 構図と主役はそのままに、様式だけを移す
+    vec4 c = texture(tex, uv);
+    vec3 from = styleLook(c.rgb, int(xf.x + 0.5));
+    vec3 to = styleLook(c.rgb, int(xf.y + 0.5));
+    return vec4(mix(from, to, clamp(mot.w, 0.0, 1.0)), c.a);
+  }
   if (tech == 1) {
     // frame-echo: 残像。過去フレーム相当を進行方向へずらして減衰合成する
     vec4 c = texture(tex, uv);
@@ -111,28 +159,28 @@ vec4 motionSampleRaw(sampler2D tex, vec2 p, vec4 mot, int tech) {
 }
 // 版ズレ: 各色版を独立した方向へずらす。印刷の見当ずれの再現なので、
 // 既存の色収差(水平のみのRGBずらし)とは別物として扱う。
-vec4 misregister(sampler2D tex, vec2 uv, vec4 mot, int tech, float amount, float angle) {
+vec4 misregister(sampler2D tex, vec2 uv, vec4 mot, int tech, vec4 xf, float amount, float angle) {
   float r = amount * 0.004;
   // シアン/マゼンタ/イエローの3版を120度ずつ違う向きへ。黒版は動かさない
   vec2 oc = vec2(cos(angle), sin(angle)) * r;
   vec2 om = vec2(cos(angle + 2.094), sin(angle + 2.094)) * r;
   vec2 oy = vec2(cos(angle + 4.189), sin(angle + 4.189)) * r;
   // CMYはRGBの補色なので、ずらした版をRGBへ戻して合成する
-  float c = 1.0 - motionSampleRaw(tex, uv + oc, mot, tech).r;
-  float m = 1.0 - motionSampleRaw(tex, uv + om, mot, tech).g;
-  float y = 1.0 - motionSampleRaw(tex, uv + oy, mot, tech).b;
+  float c = 1.0 - motionSampleRaw(tex, uv + oc, mot, tech, xf).r;
+  float m = 1.0 - motionSampleRaw(tex, uv + om, mot, tech, xf).g;
+  float y = 1.0 - motionSampleRaw(tex, uv + oy, mot, tech, xf).b;
   return vec4(1.0 - c, 1.0 - m, 1.0 - y, 1.0);
 }
 
 // 網点: 輝度をセル内の点の大きさへ変換する。angle/frequency/shape を持つ
-vec4 halftoneAt(sampler2D tex, vec2 uv, vec4 mot, int tech, float amount, float freq, float angle) {
-  vec4 src = motionSampleRaw(tex, uv, mot, tech);
+vec4 halftoneAt(sampler2D tex, vec2 uv, vec4 mot, int tech, vec4 xf, float amount, float freq, float angle) {
+  vec4 src = motionSampleRaw(tex, uv, mot, tech, xf);
   float cell = max(2.0, u_res.x / max(freq, 8.0));
   mat2 R = mat2(cos(angle), -sin(angle), sin(angle), cos(angle));
   vec2 p = R * (uv * u_res);
   vec2 center = (floor(p / cell) + 0.5) * cell;
   vec2 cuv = clamp(transpose(R) * center / u_res, 0.0, 1.0);
-  vec3 sc = motionSampleRaw(tex, cuv, mot, tech).rgb;
+  vec3 sc = motionSampleRaw(tex, cuv, mot, tech, xf).rgb;
   float lum = dot(sc, vec3(0.299, 0.587, 0.114));
   float rad = sqrt(1.0 - lum) * cell * 0.72;
   float d = length(p - center);
@@ -142,15 +190,15 @@ vec4 halftoneAt(sampler2D tex, vec2 uv, vec4 mot, int tech, float amount, float 
   return vec4(mix(src.rgb, printed, amount), src.a);
 }
 
-vec4 applySurface(sampler2D tex, vec2 p, vec4 mot, int tech, vec4 surf) {
+vec4 applySurface(sampler2D tex, vec2 p, vec4 mot, int tech, vec4 xf, vec4 surf) {
   int kind = int(surf.x + 0.5);
-  if (kind == 1) return halftoneAt(tex, p, mot, tech, surf.y, surf.z, surf.w);
-  if (kind == 2) return misregister(tex, p, mot, tech, surf.y * surf.z, surf.w);
-  return motionSampleRaw(tex, p, mot, tech);
+  if (kind == 1) return halftoneAt(tex, p, mot, tech, xf, surf.y, surf.z, surf.w);
+  if (kind == 2) return misregister(tex, p, mot, tech, xf, surf.y * surf.z, surf.w);
+  return motionSampleRaw(tex, p, mot, tech, xf);
 }
 
-vec4 sA(vec2 p) { return applySurface(u_a, p, u_motA, u_techA, u_surfA); }
-vec4 sB(vec2 p) { return applySurface(u_b, p, u_motB, u_techB, u_surfB); }
+vec4 sA(vec2 p) { return applySurface(u_a, p, u_motA, u_techA, u_xfA, u_surfA); }
+vec4 sB(vec2 p) { return applySurface(u_b, p, u_motB, u_techB, u_xfB, u_surfB); }
 void main() {
   vec2 uv = v_uv;
   float t = clamp(u_t, 0.0, 1.0);
@@ -1398,7 +1446,15 @@ function slideDurationMs(s, imageHoldMs = seqState.hold * 1000) {
 // モーション文法（docs/motion-grammar.md）のうち、静止画1枚から作れるカメラ系。
 // シェーダーの u_tech* に渡す番号と対応する。ここに無い技法は ken-burns へ
 // フォールバックし、Project JSONには元の技法名が残るので将来差し替えられる。
-const MOTION_TECH_CODE = { "ken-burns": 0, "orthographic-pullback": 0, "constant-linear": 0, "frame-echo": 1, "modular-grid": 2 };
+const MOTION_TECH_CODE = {
+  "ken-burns": 0, "orthographic-pullback": 0, "constant-linear": 0,
+  "frame-echo": 1, "modular-grid": 2,
+  "style-transformation": 3, "shape-morph": 4, "graphic-substitution": 5,
+};
+
+// style-transformation の様式名。静止画1枚から作れる範囲の「画材・質感」を持つ
+const STYLE_CODE = { photo: 0, none: 0, print: 1, halftone: 1, mono: 2, monochrome: 2, poster: 3, flat: 3 };
+const styleCode = (name) => STYLE_CODE[String(name || "").toLowerCase()] ?? 0;
 
 // カット内の進行度pから、平行移動・拡大・技法強度を作る。
 // 返す形は {x, y, scale, amount, tech} で、そのまま u_mot*/u_tech* になる。
@@ -1439,6 +1495,26 @@ function motionAt(slide, index, p, zoomOn) {
       const pulse = Math.abs(Math.sin(p * Math.PI * seq));
       // 拍の谷でも完全には止めない
       return { x: 0, y: 0, scale: 1.02 + 0.05 * p, amount: 0.25 + 0.75 * pulse, tech };
+    }
+    case "style-transformation": {
+      // 構図と主役は動かさず、様式だけをfrom→toへ移す。
+      // preserve に "composition" 以外が来ても構図は動かさない（この実装の前提）
+      const from = styleCode(params.fromStyle);
+      const to = styleCode(params.toStyle ?? "print");
+      return { x: 0, y: 0, scale: 1.02, amount: ease, tech, xf: [from, to, 0, 0] };
+    }
+    case "shape-morph": {
+      // 輪郭を押し出して戻す。対応点データが無いので明暗の境目を動かす。
+      // 中盤で最大、終盤で収束させると「変形して落ち着いた」ように読める
+      const amount = numParam(params.amount, 1);
+      const linear = params.easing === "linear";
+      const wave = Math.sin((linear ? p : ease) * Math.PI);
+      return { x: 0, y: 0, scale: 1.04, amount: wave * amount, tech, xf: [0, 0, 0, 0] };
+    }
+    case "graphic-substitution": {
+      // swapFrame（0..1）を境に写真から図形へ置き換える。位置は保つ
+      const swap = Math.min(0.95, Math.max(0.05, numParam(params.swapFrame, 0.5)));
+      return { x: 0, y: 0, scale: 1.02, amount: p, tech, xf: [0, 0, swap, 0] };
     }
     case "none":
       return { x: 0, y: 0, scale: 1, amount: 0, tech: 0 };
@@ -3249,6 +3325,10 @@ function render(time) {
     gl.uniform4f(tu.u_motB, mB.x, mB.y, mB.scale, mB.amount);
     gl.uniform1i(tu.u_techA, mA.tech);
     gl.uniform1i(tu.u_techB, mB.tech);
+    const xfA = mA.xf || [0, 0, 0, 0];
+    const xfB = mB.xf || [0, 0, 0, 0];
+    gl.uniform4f(tu.u_xfA, xfA[0], xfA[1], xfA[2], xfA[3]);
+    gl.uniform4f(tu.u_xfB, xfB[0], xfB[1], xfB[2], xfB[3]);
     const zero = { kind: 0, amount: 0, scale: 0, angle: 0 };
     const sA = seqFrame.surfA || zero;
     const sB = seqFrame.surfB || zero;

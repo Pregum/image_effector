@@ -321,7 +321,7 @@ uniform float u_split;  // ティール&オレンジ 0..1
 uniform float u_sat;    // 彩度 (1が等倍)
 uniform float u_con;    // コントラスト (1が等倍)
 uniform float u_leak;   // 光漏れ 0..1.5
-uniform float u_gradeFirst; // 1でグレードをディザの前に適用
+uniform int u_order[9]; // 色処理9段の適用順（0:ハレ 1:ディザ 2:グレード 3:光漏れ 4:スノー 5:文字 6:走査線 7:粒子 8:ビネット）
 uniform sampler2D u_text; // 文字オーバーレイ
 uniform float u_textOn;
 
@@ -405,15 +405,19 @@ void main() {
   col.g = texture(u_base, puv).g;
   col.b = texture(u_base, puv - vec2(sh, 0.0)).b;
 
+  // --- サンプリング後の色処理9段。u_order の順に適用する ---
+  for (int oi = 0; oi < 9; oi++) {
+    int stage = u_order[oi];
+
+  if (stage == 0) {
   // ハレーション（暖色寄りのにじみ）
   if (u_halation > 0.0) {
     vec3 glow = texture(u_glow, puv).rgb;
     col += glow * u_halation * vec3(1.15, 0.95, 0.8);
   }
-
-  // 適用順「ディザ前」のグレーディング
-  if (u_gradeFirst > 0.5) col = applyGrade(col);
-
+  } else if (stage == 2) {
+  col = applyGrade(col);
+  } else if (stage == 1) {
   // ディザ / ハーフトーン
   if (u_dmode == 1) {
     float lv = max(u_levels, 2.0) - 1.0;
@@ -448,9 +452,7 @@ void main() {
     col = bit == 1 ? ink : vec3(0.015, 0.03, 0.02);
   }
 
-  // カラーグレーディング（既定はディザ類の後段。「ディザ前」選択時は適用済み）
-  if (u_gradeFirst < 0.5) col = applyGrade(col);
-
+  } else if (stage == 3) {
   // 光漏れ（位置はシード依存。振り直しで移動する）
   if (u_leak > 0.0) {
     vec2 asp = vec2(u_res.x / u_res.y, 1.0);
@@ -462,31 +464,39 @@ void main() {
     col += (bloomL * 0.9 + streak) * u_leak * lc;
   }
 
+  } else if (stage == 4) {
   // トラッキング帯のスノーノイズ
   if (trackM > 0.0) {
     col = mix(col, vec3(0.72 + 0.28 * hash2(uv * u_res + floor(u_time * 20.0))), trackM * u_track * 0.6);
   }
 
-  // 文字入れ（グリッチ・ぼかしの影響を受けず、CRT湾曲・走査線・粒子には馴染む位置）
+  } else if (stage == 5) {
+  // 文字入れ
   if (u_textOn > 0.5) {
     vec4 tcol = texture(u_text, uv);
     col = mix(col, tcol.rgb, tcol.a * inside);
   }
 
+  } else if (stage == 6) {
   // 走査線＋アパーチャグリル
   if (u_scan > 0.0) {
     col *= 1.0 - u_scan * 0.35 * (0.5 + 0.5 * sin(uv.y * u_res.y * 2.094));
     col *= 1.0 - u_scan * 0.12 * (0.5 + 0.5 * sin(uv.x * u_res.x * 2.094));
   }
 
+  } else if (stage == 7) {
   // グレイン
   if (u_noise > 0.0) {
     col += (hash2(uv * u_res + fract(u_time) * vec2(7.0, 3.0)) - 0.5) * u_noise * 0.4;
   }
 
+  } else if (stage == 8) {
   // ビネット
   vec2 dc = uv - 0.5;
   col *= 1.0 - u_vig * 1.6 * dot(dc, dc);
+  }
+
+  } // 色処理ループここまで
 
   o = vec4(col * inside, 1.0);
 }`;
@@ -526,6 +536,9 @@ function program(fragSrc) {
   for (let i = 0; i < n; i++) {
     const info = gl.getActiveUniform(p, i);
     uniforms[info.name] = gl.getUniformLocation(p, info.name);
+    // 配列uniformは "u_order[0]" という名前で返るので、基底名でも引けるようにする
+    const base = info.name.replace(/\[0\]$/, "");
+    if (base !== info.name) uniforms[base] = uniforms[info.name];
   }
   return { prog: p, u: uniforms };
 }
@@ -588,6 +601,8 @@ const state = {
   curve: 0.4, scan: 0.5, track: 0, wobble: 0,
   noise: 0.3, vig: 0.4,
   temp: 0.25, fade: 0.35, split: 0.5, sat: 1.1, con: 1.1, gorder: 0,
+  // 色処理9段の適用順。既定は従来と同じ並び
+  order: [0, 1, 2, 3, 4, 5, 6, 7, 8],
   leak: 0.7,
 };
 const DEFAULTS = { ...state };
@@ -600,6 +615,42 @@ let seed = 1;
 let animate = true;
 let frozenTime = 0;
 let dirty = true;
+
+// 色処理9段の適用順を正規化する。
+// 壊れた配列や欠けがあっても既定で埋め、旧レシピの gorder(ディザ前) も汲む。
+const COLOR_STAGES = [
+  { id: 0, key: "halation", label: "ハレーション" },
+  { id: 1, key: "dither", label: "ディザ / 網点" },
+  { id: 2, key: "grade", label: "色調エモ化" },
+  { id: 3, key: "leak", label: "光漏れ" },
+  { id: 4, key: "track", label: "トラッキングノイズ" },
+  { id: 5, key: "text", label: "文字入れ" },
+  { id: 6, key: "scan", label: "走査線" },
+  { id: 7, key: "grain", label: "グレイン" },
+  { id: 8, key: "vig", label: "ビネット" },
+];
+const DEFAULT_ORDER = [0, 1, 2, 3, 4, 5, 6, 7, 8];
+
+function colorOrder(st) {
+  const raw = Array.isArray(st?.order) ? st.order : null;
+  const out = [];
+  const seen = new Set();
+  for (const v of raw || []) {
+    const n = Number(v);
+    if (Number.isInteger(n) && n >= 0 && n <= 8 && !seen.has(n)) {
+      seen.add(n);
+      out.push(n);
+    }
+  }
+  for (const n of DEFAULT_ORDER) if (!seen.has(n)) out.push(n);
+  // 明示的な順序が無く、旧レシピが「ディザ前」なら グレード→ディザ に入れ替える
+  if (!raw && st?.gorder) {
+    const gi = out.indexOf(2);
+    const di = out.indexOf(1);
+    if (gi > di) { out.splice(gi, 1); out.splice(di, 0, 2); }
+  }
+  return new Int32Array(out.slice(0, 9));
+}
 
 const MODULES = [
   { id: "blur", name: "BLUR", jp: "ぼかし",
@@ -760,6 +811,7 @@ for (const mod of MODULES) {
 }
 
 function syncUI() {
+  renderOrderList();
   for (const mod of MODULES) {
     rack.querySelector(`[data-id="${mod.id}"]`).classList.toggle("on", enabled[mod.id]);
   }
@@ -3262,7 +3314,7 @@ function render(time) {
   gl.uniform1f(u.u_sat, en.grade ? st.sat : 1);
   gl.uniform1f(u.u_con, en.grade ? st.con : 1);
   gl.uniform1f(u.u_leak, en.leak ? st.leak : 0);
-  gl.uniform1f(u.u_gradeFirst, st.gorder ? 1 : 0);
+  gl.uniform1iv(u.u_order, colorOrder(st));
   const textOn = ov ? ov.textOn : textState.str.trim() !== "";
   const textTexUse = ov ? (ov.textTex || clearTex) : (textOn ? textTex : clearTex);
   gl.activeTexture(gl.TEXTURE2);
@@ -4640,6 +4692,72 @@ if (sharedHashMatch) {
     }
   })();
 }
+
+// ---------------------------------------------------------------- 適用順のUI（ドラッグで並び替え）
+// 色処理9段の順番を入れ替える。state.order は破壊的に変更せず、常に新しい配列へ差し替える
+// （DEFAULTS や保存済みレシピと配列を共有しているため）。
+// その段が実際に効いているか（効いていない段は薄く出す）
+function stageActive(id) {
+  switch (id) {
+    case 0: return enabled.halation;
+    case 1: return enabled.dither;
+    case 2: return enabled.grade;
+    case 3: return enabled.leak;
+    case 4: return enabled.crt && state.track > 0;
+    case 5: return textState.str.trim() !== "";
+    case 6: return enabled.crt && state.scan > 0;
+    case 7: return enabled.grain && state.noise > 0;
+    case 8: return enabled.grain && state.vig > 0;
+    default: return false;
+  }
+}
+
+function renderOrderList() {
+  // syncUI は初期化の早い段階からも呼ばれるため、要素はその都度引く
+  const orderList = document.getElementById("order-list");
+  if (!orderList) return;
+  const order = [...colorOrder(state)];
+  orderList.innerHTML = "";
+  order.forEach((id, idx) => {
+    const stage = COLOR_STAGES.find((x) => x.id === id);
+    if (!stage) return;
+    const li = document.createElement("li");
+    li.draggable = true;
+    li.dataset.idx = String(idx);
+    if (!stageActive(id)) li.classList.add("off");
+    li.innerHTML =
+      `<span class="ord-num">${idx + 1}</span>` +
+      `<span class="ord-name"></span><span class="ord-grip">⠿</span>`;
+    li.querySelector(".ord-name").textContent = t(stage.label);
+    li.addEventListener("dragstart", (e) => {
+      li.classList.add("dragging");
+      e.dataTransfer.setData("text/plain", String(idx));
+      e.dataTransfer.effectAllowed = "move";
+    });
+    li.addEventListener("dragend", () => li.classList.remove("dragging"));
+    li.addEventListener("dragover", (e) => { e.preventDefault(); li.classList.add("over"); });
+    li.addEventListener("dragleave", () => li.classList.remove("over"));
+    li.addEventListener("drop", (e) => {
+      e.preventDefault();
+      li.classList.remove("over");
+      const from = parseInt(e.dataTransfer.getData("text/plain"), 10);
+      if (isNaN(from) || from === idx) return;
+      const next = [...order];
+      const [moved] = next.splice(from, 1);
+      next.splice(idx, 0, moved);
+      state.order = next;
+      renderOrderList();
+      markDirty();
+    });
+    orderList.appendChild(li);
+  });
+}
+
+document.getElementById("order-reset")?.addEventListener("click", () => {
+  state.order = [...DEFAULT_ORDER];
+  renderOrderList();
+  markDirty();
+});
 
 // ---------------------------------------------------------------- パネルの折りたたみ
 // 右パネルが長くなりすぎたので、セクション単位で畳めるようにする

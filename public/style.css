@@ -750,3 +750,25 @@ body.embed #view { max-height: 100vh; border: none; box-shadow: none; }
 .panel-section.collapsed > .section-title::before { transform: rotate(-90deg); }
 .panel-section.collapsed > .section-title { margin-bottom: 0; }
 .panel-section.collapsed > *:not(.section-title) { display: none; }
+
+/* ---- 適用順（ドラッグで並び替え） ---- */
+.order-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.order-list li {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 10px;
+  background: #161a11;
+  border: 1px solid var(--line);
+  font-size: 12px;
+  color: var(--ink);
+  cursor: grab;
+  user-select: none;
+}
+.order-list li:hover { border-color: var(--line-hi); }
+.order-list li.dragging { opacity: 0.4; }
+.order-list li.over { border-color: var(--acid); }
+.order-list .ord-num {
+  font-family: var(--font-mono); font-size: 10px; color: var(--ink-dim);
+  min-width: 14px;
+}
+.order-list .ord-grip { color: var(--ink-dim); font-size: 11px; margin-left: auto; }
+.order-list li.off { color: var(--ink-dim); opacity: 0.55; }

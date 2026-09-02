@@ -172,6 +172,13 @@ const EN = {
     "The media exceeds 150MB, so it cannot be embedded in JSON. This will be supported once cloud references land.",
   "素材を含むProject JSONを作成中…": "Building a Project JSON with the media embedded…",
 
+  "／ 適用順": "／ Order",
+  "色処理の適用順": "Color stage order",
+  "ドラッグで色処理の順番を入れ替えられます。上から順に適用されます。":
+    "Drag to reorder the color stages. They are applied from top to bottom.",
+  "既定に戻す": "Reset to default",
+  "トラッキングノイズ": "Tracking noise",
+  "文字入れ": "Text",
   // --- エフェクトラック ---
   "／ エフェクトラック": "／ Effect rack",
   "ぼかし": "Blur",

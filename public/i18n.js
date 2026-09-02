@@ -133,6 +133,45 @@ const EN = {
   "画像を読み込めませんでした。": "Could not load that image.",
   "カットは最大8枚までです。": "Up to 8 cuts.",
 
+  // --- 動画（クリップ・トランジション・導線） ---
+  "かんたん動画の作り方": "How to make a video",
+  "素材": "Media",
+  "雰囲気": "Mood",
+  "保存": "Save",
+  "動画クリップ": "Video clip",
+  "開始": "Start",
+  "終了": "End",
+  "サムネイルを選ぶとトリムできます。動画音声は現在BGMへ置き換えて書き出します。":
+    "Select a thumbnail to trim it. For now, a clip's own audio is replaced by the background music on export.",
+  "パンチズーム": "Punch zoom",
+  "フラッシュ": "Flash",
+  "プッシュ": "Push",
+  "フィルムバーン": "Film burn",
+  "すべてNOIZ LAB独自実装。プレビューとMP4/GIF書き出しに反映されます。":
+    "All implemented in NOIZ LAB itself. They apply to the preview and to MP4/GIF export.",
+
+  // --- file:// で開いたときの警告 ---
+  "ローカルサーバー経由で開いてください": "Please open this through a local server",
+  "見た目は表示できますが、WebGL編集・動画書き出し・AI生成は":
+    "The page renders, but WebGL editing, video export and AI generation need a server rather than",
+  "直開きでは動作しません。": "opened directly.",
+
+  "トランジション": "Transition",
+  "Project JSONが大きすぎます（上限210MB）。": "That Project JSON is too large (210MB limit).",
+  "Project JSONを書き出せませんでした。": "Could not export the Project JSON.",
+  "Project JSONを読み込み中…": "Loading Project JSON…",
+  "Workers AI で生成しています（10秒前後）…": "Generating with Workers AI (about 10 seconds)…",
+  "プロジェクトを開けませんでした。": "Could not open that project.",
+  "保存されたプロジェクトはありません。": "No saved project yet.",
+  "保存できませんでした。ブラウザの保存領域を確認してください。":
+    "Could not save. Check your browser's storage.",
+  "先に画像か動画を追加してください。": "Add an image or video first.",
+  "動画クリップを含む場合はMP4で書き出してください。GIFは画像カットのみ対応しています。":
+    "Export as MP4 when the timeline contains video clips. GIF supports image cuts only.",
+  "素材が150MBを超えるためJSONへ埋め込めません。クラウド参照形式の実装後に対応します。":
+    "The media exceeds 150MB, so it cannot be embedded in JSON. This will be supported once cloud references land.",
+  "素材を含むProject JSONを作成中…": "Building a Project JSON with the media embedded…",
+
   // --- エフェクトラック ---
   "／ エフェクトラック": "／ Effect rack",
   "ぼかし": "Blur",
@@ -272,5 +311,9 @@ export function localizeDom(root = document.body) {
   for (const el of root.querySelectorAll("[title]")) {
     const v = EN[el.getAttribute("title")];
     if (v) el.setAttribute("title", v);
+  }
+  for (const el of root.querySelectorAll("[aria-label]")) {
+    const v = EN[el.getAttribute("aria-label")];
+    if (v) el.setAttribute("aria-label", v);
   }
 }

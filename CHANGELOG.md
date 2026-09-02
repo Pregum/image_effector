@@ -6,6 +6,9 @@
 ## [1.2.0] — 2026-09-02
 
 ### 追加
+- **プロジェクトのクラウド保存**: 素材ごとProject JSONにしてR2へ置き、一覧をD1に持つ。
+  ギャラリーと同じアクセスキーで守られ、別端末のブラウザから同じ続きを開ける
+  （`PUT/GET/DELETE /api/projects`、1件あたり40MBまで）
 - **スタイルバイブル**: 参照画像から代表色を6色拾って、プロジェクト共通のパレットにする。
   新しい色処理「パレット寄せ」が全カットの色をそのパレットへ寄せるので、素材がバラバラでも
   カット間の色が揃う（パレットはレシピではなくプロジェクトに属するので、必ず全カット共通）
@@ -43,6 +46,9 @@
 - **Video review**: the Web UI can now run the same checks as the MCP `review_hook_and_pacing`
   (opening, length, pacing, captions, aspect ratio) and lists the findings with a score.
 - **Effect reordering**: drag to reorder the nine colour stages, halation through vignette.
+- **Cloud projects**: a project, assets and all, is stored in R2 with its listing in D1, behind the
+  same access key as the gallery, so another browser can pick up where you left off
+  (`PUT/GET/DELETE /api/projects`, 40MB per project).
 - **Style bible**: pick six representative colors from a reference image and keep them at the
   project level. A new colour stage, palette lock, pulls every cut toward that palette, so cuts
   from different sources share one colour identity. AI image generation gets the same palette

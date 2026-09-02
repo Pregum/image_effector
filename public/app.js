@@ -2622,6 +2622,132 @@ async function exportProjectJson() {
 }
 
 const projectInput = document.getElementById("project-input");
+// ---- プロジェクトのクラウド保存
+// 素材ごとProject JSONにしてR2へ置く。ギャラリーと同じアクセスキーで守られる。
+// これで別の端末のブラウザ、あるいはMCPから同じ続きを開ける。
+const cloudKey = () => (localStorage.getItem("nl_gallery_key") || "").trim();
+
+async function projectWithBlobs() {
+  const manifest = buildProjectManifest("embedded");
+  const blobs = projectBlobs();
+  for (const asset of manifest.assets) {
+    const blob = blobs[asset.id];
+    if (!blob) throw new Error(`missing blob: ${asset.id}`);
+    asset.source = { kind: "embedded", data: await blobToBase64(blob) };
+  }
+  return manifest;
+}
+
+async function cloudSave() {
+  if (!slides.length) { projectNote.textContent = t("先に画像か動画を追加してください。"); return; }
+  const key = cloudKey();
+  if (!key) { projectNote.textContent = t("ギャラリーのアクセスキーを設定してください。"); return; }
+  projectNote.textContent = t("クラウドへ保存中…");
+  try {
+    const body = stringifyProject(await projectWithBlobs());
+    if (body.length > 40 * 1024 * 1024) {
+      projectNote.textContent = t("素材が大きすぎてクラウドに保存できません（上限40MB）。");
+      return;
+    }
+    const res = await fetch("/api/projects", {
+      method: "PUT",
+      headers: { "content-type": "application/json", "x-gallery-key": key },
+      body,
+    });
+    if (res.status === 401) { projectNote.textContent = t("アクセスキーが違います。"); return; }
+    if (res.status === 503) { projectNote.textContent = t("この構成ではクラウド保存を使えません。"); return; }
+    if (!res.ok) throw new Error(String(res.status));
+    const info = await res.json();
+    projectNote.textContent = `${t("クラウドへ保存しました")} · ${info.title}（${(info.bytes / 1024 / 1024).toFixed(1)}MB）`;
+    if (!cloudItems.hidden) await cloudRefresh();
+  } catch {
+    projectNote.textContent = t("クラウドへ保存できませんでした。");
+  }
+}
+
+const cloudItems = { get el() { return document.getElementById("cloud-items"); }, get hidden() { return this.el?.hidden !== false; } };
+
+async function cloudRefresh() {
+  const el = cloudItems.el;
+  const key = cloudKey();
+  if (!el) return;
+  if (!key) { projectNote.textContent = t("ギャラリーのアクセスキーを設定してください。"); return; }
+  el.hidden = false;
+  el.innerHTML = `<p class="text-hint">${t("読み込み中…")}</p>`;
+  try {
+    const res = await fetch("/api/projects", { headers: { "x-gallery-key": key } });
+    if (!res.ok) throw new Error(String(res.status));
+    const { projects } = await res.json();
+    el.innerHTML = "";
+    if (!projects.length) {
+      el.innerHTML = `<p class="text-hint">${t("クラウドに保存したプロジェクトはまだありません。")}</p>`;
+      return;
+    }
+    for (const p of projects) {
+      const row = document.createElement("div");
+      row.className = "cloud-item";
+      const info = document.createElement("div");
+      const b = document.createElement("b");
+      b.textContent = p.title;
+      const small = document.createElement("small");
+      small.textContent = `${new Date(p.updated_at).toLocaleString()} · ${p.cuts}${t("カット")} · ${(p.bytes / 1024 / 1024).toFixed(1)}MB`;
+      info.append(b, small);
+      const open = document.createElement("button");
+      open.className = "btn";
+      open.textContent = t("開く");
+      open.addEventListener("click", () => cloudOpen(p.id));
+      const del = document.createElement("button");
+      del.className = "btn";
+      del.textContent = "✕";
+      del.title = t("削除");
+      del.addEventListener("click", () => cloudDelete(p.id, del));
+      row.append(info, open, del);
+      el.appendChild(row);
+    }
+  } catch {
+    el.innerHTML = `<p class="text-hint">${t("クラウドの一覧を取得できませんでした。")}</p>`;
+  }
+}
+
+async function cloudOpen(id) {
+  projectNote.textContent = t("クラウドから読み込み中…");
+  try {
+    const res = await fetch(`/api/projects/${encodeURIComponent(id)}`, { headers: { "x-gallery-key": cloudKey() } });
+    if (!res.ok) throw new Error(String(res.status));
+    const manifest = parseProjectJson(await res.text());
+    await restoreProject(manifest);
+    projectNote.textContent = `${t("クラウドから開きました")} · ${manifest.title}`;
+  } catch (error) {
+    projectNote.textContent = String(error?.message || t("クラウドから開けませんでした。"));
+  }
+}
+
+// 二度押しで削除。取り消せない操作をワンクリックで通さない
+async function cloudDelete(id, btn) {
+  if (btn.dataset.confirm !== "1") {
+    btn.dataset.confirm = "1";
+    btn.textContent = t("本当に？");
+    setTimeout(() => { btn.dataset.confirm = ""; btn.textContent = "✕"; }, 4000);
+    return;
+  }
+  try {
+    await fetch(`/api/projects/${encodeURIComponent(id)}`, {
+      method: "DELETE", headers: { "x-gallery-key": cloudKey() },
+    });
+    await cloudRefresh();
+  } catch {
+    projectNote.textContent = t("削除できませんでした。");
+  }
+}
+
+document.getElementById("cloud-save")?.addEventListener("click", cloudSave);
+document.getElementById("cloud-list")?.addEventListener("click", () => {
+  const el = cloudItems.el;
+  if (!el) return;
+  if (!el.hidden) { el.hidden = true; return; }
+  cloudRefresh();
+});
+
 async function importProjectJson(file) {
   if (file.size > 210 * 1024 * 1024) {
     projectNote.textContent = "Project JSONが大きすぎます（上限210MB）。";

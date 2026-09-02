@@ -321,6 +321,69 @@ const ogSize = (w, h) => scaled(w, h, Math.min(1, OG_MAX_EDGE / Math.max(w, h)))
 // サムネは従来から幅基準（縦長でも幅360pxまで）
 const thumbSize = (w, h) => scaled(w, h, Math.min(1, THUMB_MAX_EDGE / w));
 
+// --- プロジェクトのクラウド保存 ---
+// 実体(素材埋め込みのProject JSON)はR2、一覧に出すメタだけD1へ。
+// 認証はギャラリーと同じアクセスキー。別の端末のブラウザやMCPから同じ続きを開ける。
+const MAX_PROJECT_BYTES = 40 * 1024 * 1024;
+
+async function putProject(req, env) {
+  if (!authed(req, env)) return json({ error: "unauthorized" }, 401);
+  if (!(await rateLimit(env, clientIp(req) + "#projects", 20))) {
+    return json({ error: "rate limited" }, 429);
+  }
+  const text = await req.text();
+  if (!text || text.length > MAX_PROJECT_BYTES) {
+    return json({ error: "project too large" }, 413);
+  }
+  let project;
+  try { project = JSON.parse(text); }
+  catch { return json({ error: "invalid json" }, 400); }
+  const id = String(project?.id || "").trim();
+  if (!/^[A-Za-z0-9_.:-]{1,128}$/.test(id)) return json({ error: "invalid project id" }, 400);
+  const title = String(project?.title || "Untitled").slice(0, 200);
+  const visual = (project?.timeline?.tracks || []).find((t) => t?.type === "visual");
+  const cuts = Array.isArray(visual?.clips) ? visual.clips.length : 0;
+  const duration = Number(project?.brief?.duration) || 0;
+  const bytes = new TextEncoder().encode(text).length;
+
+  await env.IMAGES.put(`projects/${id}.json`, text, {
+    httpMetadata: { contentType: "application/json" },
+  });
+  await env.DB.prepare(
+    `INSERT INTO projects (id, updated_at, title, bytes, cuts, duration)
+     VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT(id) DO UPDATE SET
+       updated_at = excluded.updated_at, title = excluded.title,
+       bytes = excluded.bytes, cuts = excluded.cuts, duration = excluded.duration`,
+  ).bind(id, Date.now(), title, bytes, cuts, duration).run();
+
+  return json({ id, title, bytes, cuts, duration });
+}
+
+async function listProjects(req, env) {
+  if (!authed(req, env)) return json({ error: "unauthorized" }, 401);
+  const { results } = await env.DB.prepare(
+    "SELECT id, updated_at, title, bytes, cuts, duration FROM projects ORDER BY updated_at DESC LIMIT 50",
+  ).all();
+  return json({ projects: results || [] });
+}
+
+async function getProject(req, env, id) {
+  if (!authed(req, env)) return json({ error: "unauthorized" }, 401);
+  const obj = await env.IMAGES.get(`projects/${id}.json`);
+  if (!obj) return json({ error: "not found" }, 404);
+  return new Response(obj.body, {
+    headers: { "content-type": "application/json", "cache-control": "no-store" },
+  });
+}
+
+async function deleteProject(req, env, id) {
+  if (!authed(req, env)) return json({ error: "unauthorized" }, 401);
+  await env.IMAGES.delete(`projects/${id}.json`);
+  await env.DB.prepare("DELETE FROM projects WHERE id = ?").bind(id).run();
+  return json({ ok: true });
+}
+
 async function saveWork(req, env, ctx, ai) {
   if (!authed(req, env)) return json({ error: "unauthorized" }, 401);
   if (!(await rateLimit(env, clientIp(req) + "#gallery", 10))) {
@@ -1232,6 +1295,18 @@ export default {
     if (pathname === "/api/suggest" && req.method === "POST") {
       if (!ai) return disabled("ai");
       return tracked(env, req, "ai_suggest", suggestRoute(req, env, ai));
+    }
+
+    if (pathname.startsWith("/api/projects")) {
+      if (!gallery) return disabled("gallery");
+      if (pathname === "/api/projects" && req.method === "PUT") return putProject(req, env);
+      if (pathname === "/api/projects" && req.method === "GET") return listProjects(req, env);
+      const pid = decodeURIComponent(pathname.slice("/api/projects/".length));
+      if (pid && /^[A-Za-z0-9_.:-]{1,128}$/.test(pid)) {
+        if (req.method === "GET") return getProject(req, env, pid);
+        if (req.method === "DELETE") return deleteProject(req, env, pid);
+      }
+      return json({ error: "not found" }, 404);
     }
 
     if (pathname.startsWith("/api/works") && !gallery) return disabled("gallery");

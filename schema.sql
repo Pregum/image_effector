@@ -15,3 +15,14 @@ CREATE TABLE IF NOT EXISTS works (
   shared INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_works_created ON works (created_at DESC);
+
+-- クラウド保存したプロジェクト。実体(Project JSON)はR2、ここは一覧用のメタだけ
+CREATE TABLE IF NOT EXISTS projects (
+  id TEXT PRIMARY KEY,
+  updated_at INTEGER NOT NULL,
+  title TEXT NOT NULL,
+  bytes INTEGER NOT NULL,
+  cuts INTEGER NOT NULL DEFAULT 0,
+  duration REAL NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_projects_updated ON projects (updated_at DESC);

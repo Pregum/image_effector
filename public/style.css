@@ -698,15 +698,51 @@ input[type="range"]::-moz-range-thumb {
   .gallery-overlay { padding: 2vh 2vw; }
 }
 
-/* タッチ端末はスライダーのつまみとタップ領域を大きく */
+/* タッチ端末はスライダーのつまみとタップ領域を大きく。
+   指で押すものは44px角を下限にする（iOSのガイドラインに合わせる）。 */
 @media (pointer: coarse) {
   input[type="range"] { height: 28px; }
   input[type="range"]::-webkit-slider-thumb { width: 20px; height: 20px; margin-top: -8.5px; }
   input[type="range"]::-moz-range-thumb { width: 20px; height: 20px; }
   .module-head { padding: 12px; }
-  .preset-chip { padding: 8px 12px; }
-  .seg button { padding: 8px 2px; }
+
+  .btn,
+  .preset-chip,
+  .seg button,
+  .stage-tabs button,
+  .transition-grid button,
+  .cloud-item button {
+    min-height: 44px;
+    padding-top: 10px;
+    padding-bottom: 10px;
+  }
+  .seg button { padding-left: 2px; padding-right: 2px; }
+  .cloud-item button { min-height: 40px; }
+
+  /* ステージ下の小さなボタン列（比率・共有・言語）と、モジュールのサイコロ */
+  .ratio-seg button,
+  .share-btn,
+  .dice { min-height: 40px; padding-top: 8px; padding-bottom: 8px; }
+
+  /* リンクは文字だけだと指で狙えないので、上下に余白を持たせる */
+  .topbar-links { align-items: center; }
+  .topbar-links a { padding: 12px 4px; }
+
+  /* チェックボックスと、その文字ごとタップできるように */
+  input[type="checkbox"] { width: 22px; height: 22px; }
+  .anim-toggle { min-height: 44px; display: inline-flex; align-items: center; gap: 6px; }
+
+  /* カット削除の✕。押しやすくはするが、誤爆しないようサムネの角に留める */
+  .work-del { padding: 6px 8px; font-size: 15px; }
+
+  /* テキスト入力もタップしてから狙い直さずに済む高さにする */
+  #caption-input, #caption-theme, #bible-negative, #bible-seed, #text-input, #ai-prompt {
+    min-height: 40px;
+  }
 }
+
+/* スライダーはつまみの分だけ親からはみ出していたので、内側に収める */
+.ctl, .ctl input[type="range"] { box-sizing: border-box; max-width: 100%; }
 
 /* ---- embed mode (about ページ内のライブプレビュー用) ---- */
 body.embed { overflow: hidden; }

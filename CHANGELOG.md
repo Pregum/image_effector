@@ -26,6 +26,13 @@
 - **エフェクトの並び替え**: COLOR系9段（ハレーション〜ビネット）の適用順をドラッグで変更
 - **Motion Grammarの変形技法**: スタイル変換・形状変形・図形置換をレンダラーで実装
 
+### 修正
+- スマホでの当たり判定を実機基準で見直した。iPhone 390pxをエミュレートして測ったところ、
+  ボタン・プリセット・つなぎの選択・比率/共有/言語・サイコロが22〜28pxしかなく、
+  指で狙うには小さすぎた。タッチ端末では44px（`.cloud-item` などは40px）を下限にし、
+  About/GitHubリンクとチェックボックスのラベルもタップ領域を44pxに広げた
+- スライダーがつまみの分だけ親要素から4pxはみ出していたのを内側へ収めた
+
 ### ツール
 - CLIレンダラー（`scripts/noizlab-effect.mjs`）に `--caption` / `--palette` /
   `--palette-mix` / `--gif` を追加。カットごとの字幕とスタイルバイブルを効かせた
@@ -75,6 +82,9 @@
   project level. A new colour stage, palette lock, pulls every cut toward that palette, so cuts
   from different sources share one colour identity. AI image generation gets the same palette
   and avoid-list.
+- Touch targets reworked against an emulated 390px phone: buttons, preset chips, the transition
+  picker, the ratio/share/language row and the dice buttons were 22–28px tall. On touch devices
+  they are now at least 44px, and the About/GitHub links and checkbox labels get a 44px tap area.
 - CLI renderer gains `--caption`, `--palette`, `--palette-mix` and `--gif`, so captioned,
   palette-locked videos and GIFs can be produced from the command line. The README demo
   assets are generated with it.

@@ -145,7 +145,9 @@ const HARNESS = `
 
     if (CASE === "caption") {
       for (let i = 0; i < 2; i++) await addCut();
+      // プレビューは実時間で進むので、どのカットを見ていても字幕が出るよう全カットに入れる
       slides[0].caption = "無音でも伝わる一言";
+      slides[1].caption = "次のカットにも字幕";
       const s0 = seqAt(0, slides.length, seqState.hold * 1000, seqState.trans * 1000, seqState.zoom);
       seqFrame = {
         texA: slides[s0.a].tex, texB: slides[s0.b].tex, t: s0.t,
@@ -168,7 +170,7 @@ const HARNESS = `
       setPreviewMode(true);
       await new Promise((r) => setTimeout(r, 500));
       const pv = document.getElementById("caption-preview");
-      push("overlay", (!pv.hidden) + ":" + (pv.textContent === slides[0].caption));
+      push("overlay", (!pv.hidden) + ":" + slides.some((s) => s.caption === pv.textContent));
       setPreviewMode(false);
     }
 

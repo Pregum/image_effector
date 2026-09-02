@@ -374,6 +374,7 @@ MIT License（[LICENSE](LICENSE)）。
 - [x] MCPからのAI絵コンテ生成（自前で書く／サーバーのLLMに書かせる）
 - [x] MCPからの不足素材のAI生成
 - [ ] TikTok Content Posting APIを使った下書き／直接投稿
-  （TikTok側で開発者アプリの登録と審査、利用者のOAuth連携が必要なため、こちらの都合だけでは進められません）
+  （TikTok側で開発者アプリの登録と審査、利用者のOAuth連携が必要なため未着手。
+  段取りは[TikTok投稿の手順](docs/tiktok-posting.md)にまとめてあります）
 - [x] エフェクトの並び替え（COLOR系9段の適用順をドラッグで入れ替え）
 - [ ] AI img2img（無料枠で動くモデルが見つからず保留）

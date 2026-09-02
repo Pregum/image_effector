@@ -26,6 +26,11 @@
 - **エフェクトの並び替え**: COLOR系9段（ハレーション〜ビネット）の適用順をドラッグで変更
 - **Motion Grammarの変形技法**: スタイル変換・形状変形・図形置換をレンダラーで実装
 
+### ドキュメント
+- [TikTok投稿の手順](docs/tiktok-posting.md)を追加。開発者アプリの登録から
+  OAuth・下書き保存・直接投稿までの段取りと、NOIZ LAB側に足すルート・テーブル・
+  シークレット、規約上守ることをまとめた（実装は未着手）
+
 ### 変更
 - MCPの `apply_style_bible` が書く `{preset, palette, seed}` 形式のレシピを、Web版が
   読める形へ解決するように（これまでは既定値で描画していた）
@@ -53,6 +58,9 @@
   project level. A new colour stage, palette lock, pulls every cut toward that palette, so cuts
   from different sources share one colour identity. AI image generation gets the same palette
   and avoid-list.
+- Added [a walkthrough for TikTok posting](docs/tiktok-posting.md): developer-app registration,
+  OAuth, draft upload and direct post, plus the routes, table and secrets NOIZ LAB would need.
+  Not implemented yet.
 - MCP `apply_style_bible` recipes (`{preset, palette, seed}`) now resolve into real settings in the web app.
 - **Motion Grammar transformation techniques**: style transformation, shape morph and graphic substitution.
 

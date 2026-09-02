@@ -24,6 +24,10 @@ Options:
   --preset <name>    ${PRESETS.join(" | ")} (default: CINEMA)
   --ratio <ratio>    original | 16:9 | square | 1:1 | 9:16 (default: original)
   --text <text>      Add title text. Use | for a line break.
+  --caption <text>   Per-cut captions for --video. Use | to separate cuts.
+  --palette <image>  Style bible reference: pull its colors and lock every cut to them
+  --palette-mix <n>  How hard to pull toward the palette, 0-1 (default: 0.35)
+  --gif              Export an animated GIF instead of MP4 (video mode, images only)
   --video            Build a transition video from 2-8 input images
   --transition <t>   ${TRANSITIONS.join(" | ")} (default: glitch)
   --hold <seconds>   Time each image stays visible, 0.3-3 (default: 1.4)
@@ -35,7 +39,8 @@ Options:
 
 Example:
   node scripts/noizlab-effect.mjs photo.jpg out.png --preset FILM --text "夏の終わり|1999"
-  node scripts/noizlab-effect.mjs --video 1.png 2.png 3.png ending.mp4 --preset FILM --ratio 16:9 --transition dissolve`);
+  node scripts/noizlab-effect.mjs --video 1.png 2.png 3.png ending.mp4 --preset FILM --ratio 16:9 --transition dissolve
+  node scripts/noizlab-effect.mjs --video 1.png 2.png 3.png demo.gif --gif --palette ref.png --caption "夏の終わり|全部捨てた|見てほしい"`);
   process.exit(code);
 }
 
@@ -44,19 +49,23 @@ function parseArgs(argv) {
   const opts = {
     preset: "CINEMA", ratio: "original", text: "", chrome: "",
     video: false, transition: "glitch", hold: 1.4, duration: 0.8, zoom: true,
+    caption: "", palette: "", paletteMix: "", gif: false,
   };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "-h" || arg === "--help") usage();
     if (arg === "--video") { opts.video = true; continue; }
+    if (arg === "--gif") { opts.gif = true; continue; }
     if (arg === "--no-zoom") { opts.zoom = false; continue; }
     if (arg === "--list-presets") {
       console.log(PRESETS.join("\n"));
       process.exit(0);
     }
-    if (["--preset", "--ratio", "--text", "--chrome", "--transition", "--hold", "--duration"].includes(arg)) {
+    if (["--preset", "--ratio", "--text", "--chrome", "--transition", "--hold", "--duration", "--caption", "--palette", "--palette-mix"].includes(arg)) {
       if (argv[i + 1] == null) throw new Error(`${arg} requires a value`);
-      opts[arg.slice(2)] = argv[++i];
+      // --palette-mix のようなケバブ記法を camelCase の名前へ揃える
+      const key = arg.slice(2).replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+      opts[key] = argv[++i];
       continue;
     }
     if (arg.startsWith("-")) throw new Error(`Unknown option: ${arg}`);
@@ -72,9 +81,16 @@ function parseArgs(argv) {
   for (const input of opts.inputs) {
     if (!existsSync(input)) throw new Error(`Input file not found: ${input}`);
   }
+  if (opts.palette && !existsSync(opts.palette)) throw new Error(`Palette reference not found: ${opts.palette}`);
+  if (opts.paletteMix !== "") {
+    const mix = Number(opts.paletteMix);
+    if (!(mix >= 0 && mix <= 1)) throw new Error("--palette-mix must be between 0 and 1");
+  }
+  if (opts.gif && !opts.video) throw new Error("--gif needs --video");
   const outExt = extname(opts.output).toLowerCase();
   if (!opts.video && outExt !== ".png") throw new Error("Image output must end in .png");
-  if (opts.video && ![".mp4", ".webm"].includes(outExt)) throw new Error("Video output must end in .mp4 or .webm");
+  if (opts.video && opts.gif && outExt !== ".gif") throw new Error("GIF output must end in .gif");
+  if (opts.video && !opts.gif && ![".mp4", ".webm"].includes(outExt)) throw new Error("Video output must end in .mp4 or .webm");
   if (!TRANSITIONS.includes(opts.transition)) {
     throw new Error(`Unknown transition: ${opts.transition}`);
   }
@@ -253,6 +269,22 @@ async function main() {
       text.dispatchEvent(new Event('input', { bubbles: true }));
       return true;
     })()`);
+    if (opts.palette) {
+      const ref = await evalJs(cdp, "document.getElementById('bible-ref-input')", false);
+      await cdp.send("DOM.setFileInputFiles", { files: [resolve(opts.palette)], objectId: ref.objectId });
+      await waitFor(
+        () => evalJs(cdp, "document.getElementById('bible-swatches').children.length > 0"),
+        "style bible palette",
+      );
+      if (opts.paletteMix !== "") {
+        await evalJs(cdp, `(() => {
+          const slider = document.querySelector('[data-id="palette"] input[type="range"]');
+          slider.value = ${JSON.stringify(opts.paletteMix)};
+          slider.dispatchEvent(new Event('input', { bubbles: true }));
+          return true;
+        })()`);
+      }
+    }
     await delay(500);
     if (opts.video) {
       await evalJs(cdp, "document.getElementById('slide-add').click(); true");
@@ -266,6 +298,16 @@ async function main() {
           `video cut ${i + 1}`,
         );
       }
+      const captions = opts.caption ? opts.caption.split("|") : [];
+      for (let i = 0; i < captions.length && i < opts.inputs.length; i++) {
+        await evalJs(cdp, `(() => {
+          document.querySelectorAll('.slide-item img')[${i}].click();
+          const el = document.getElementById('caption-input');
+          el.value = ${JSON.stringify(captions[i].slice(0, 60))};
+          el.dispatchEvent(new Event('input', { bubbles: true }));
+          return true;
+        })()`);
+      }
       await evalJs(cdp, `(() => {
         const mode = ${JSON.stringify(TRANSITIONS.indexOf(opts.transition))};
         document.querySelector('#trans-mode-seg button[data-mode="' + mode + '"]').click();
@@ -277,20 +319,25 @@ async function main() {
         duration.dispatchEvent(new Event('input', { bubbles: true }));
         const zoom = document.getElementById('chk-zoom');
         if (zoom.checked !== ${JSON.stringify(opts.zoom)}) zoom.click();
-        document.getElementById('btn-transition').click();
+        document.getElementById(${JSON.stringify(opts.gif ? "btn-gif" : "btn-transition")}).click();
         return true;
       })()`);
+      const wanted = opts.gif ? /\.gif$/i : /\.(mp4|webm)$/i;
       const downloaded = await waitFor(async () => {
         const files = await readdir(downloads);
-        return files.find((name) => /\.(mp4|webm)$/i.test(name)) || null;
-      }, "video export", 90_000);
+        return files.find((name) => wanted.test(name)) || null;
+      }, opts.gif ? "GIF export" : "video export", 180_000);
       const actualExt = extname(downloaded).toLowerCase();
       const requestedExt = extname(opts.output).toLowerCase();
       const finalOutput = actualExt === requestedExt
         ? opts.output
         : opts.output.slice(0, -requestedExt.length) + actualExt;
       await rename(join(downloads, downloaded), finalOutput);
-      console.log(`Created ${finalOutput} (${opts.inputs.length} cuts, ${opts.transition}, ${opts.preset}, ${opts.ratio})`);
+      const extras = [
+        opts.palette ? "palette-locked" : "",
+        opts.caption ? "captioned" : "",
+      ].filter(Boolean).join(", ");
+      console.log(`Created ${finalOutput} (${opts.inputs.length} cuts, ${opts.transition}, ${opts.preset}, ${opts.ratio}${extras ? `, ${extras}` : ""})`);
     } else {
       await evalJs(cdp, "document.getElementById('btn-save').click(); true");
       const downloaded = await waitFor(async () => {

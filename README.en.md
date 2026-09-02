@@ -16,6 +16,23 @@ encoder and the force-directed graph are all written from scratch. MIT licensed.
 
 ![demo](docs/demo.gif)
 
+*Four stills arranged as cuts, a caption burned into each, joined with a film-burn transition and
+exported as MP4 — all inside the browser.*
+
+### Style bible — one colour identity across mismatched footage
+
+A reference image is reduced to up to six colours, and every cut is pulled toward them. The palette
+belongs to the project rather than to a per-cut recipe, so every cut necessarily shares it.
+
+![Style bible before and after](docs/style-bible.png)
+
+### The panel
+
+![Editor panel](docs/ui.png)
+
+*Left: the palette pulled from a reference image, plus the avoid-list. Right: per-cut captions,
+AI-written captions, cloud projects, and the hook/pacing review.*
+
 ## Examples (AI scene generation)
 
 A prompt in any language → an LLM designs a scene spec (JSON) → the browser draws it

@@ -2315,7 +2315,8 @@ function renderBible() {
       ? `${styleRefName || t("参照画像")}：${stylePalette.map(rgbToHex).join(" ")}`
       : t("参照画像の色を6色に丸めて、全カットの色をそこへ寄せます。");
   }
-  if (bibleEls.seed && document.activeElement !== bibleEls.seed) bibleEls.seed.value = seed;
+  // seedは内部的には小数。入力欄に17桁並べても読めないので丸めて見せる
+  if (bibleEls.seed && document.activeElement !== bibleEls.seed) bibleEls.seed.value = Number(seed.toFixed(2));
   markDirty();
 }
 
@@ -2359,7 +2360,7 @@ document.getElementById("bible-clear")?.addEventListener("click", () => {
 bibleEls.seed?.addEventListener("change", () => {
   const v = Number(bibleEls.seed.value);
   if (!Number.isFinite(v)) return;
-  seed = Math.max(0, Math.round(v));
+  seed = Math.max(0, v);
   syncUI();
   markDirty();
 });

@@ -26,6 +26,16 @@
 - **エフェクトの並び替え**: COLOR系9段（ハレーション〜ビネット）の適用順をドラッグで変更
 - **Motion Grammarの変形技法**: スタイル変換・形状変形・図形置換をレンダラーで実装
 
+### ツール
+- CLIレンダラー（`scripts/noizlab-effect.mjs`）に `--caption` / `--palette` /
+  `--palette-mix` / `--gif` を追加。カットごとの字幕とスタイルバイブルを効かせた
+  動画・GIFをコマンドから作れる（READMEのデモ素材はこれで生成している）
+
+### ドキュメント素材
+- `docs/demo.gif` を字幕入りの4カット動画へ差し替え
+- `docs/style-bible.png`（パレット寄せの有無を並べた比較）と
+  `docs/ui.png`（スタイルバイブルと動画パネル）を追加し、両READMEへ掲載
+
 ### テスト
 - `scripts/test-web-app.mjs` を追加。public/ を複製して検証コードを足し、headless Chromeで
   実際に描画させた結果を検査する18項目の回帰テスト。配列uniformがシェーダへ届かない、
@@ -65,6 +75,11 @@
   project level. A new colour stage, palette lock, pulls every cut toward that palette, so cuts
   from different sources share one colour identity. AI image generation gets the same palette
   and avoid-list.
+- CLI renderer gains `--caption`, `--palette`, `--palette-mix` and `--gif`, so captioned,
+  palette-locked videos and GIFs can be produced from the command line. The README demo
+  assets are generated with it.
+- Refreshed the README figures: a captioned four-cut demo GIF, a palette-lock before/after
+  comparison, and a shot of the style bible and video panels.
 - Added `scripts/test-web-app.mjs`: 18 regression checks that render the real app in headless
   Chrome, covering array uniforms reaching the shader, module initialisation, Project JSON
   round-trips and caption burn-in. Skipped when no Chrome is found.

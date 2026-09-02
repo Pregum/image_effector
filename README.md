@@ -14,6 +14,20 @@
 
 ![demo](docs/demo.gif)
 
+*素材4枚をカットに並べ、カットごとの字幕を焼き込み、フィルムバーンでつないでMP4に書き出したもの。すべてブラウザ内で完結しています。*
+
+### スタイルバイブル ー 素材がバラバラでもカット間の色を揃える
+
+参照画像から代表色を6色まで拾い、全カットの色をそこへ寄せます。パレットはカットごとのレシピではなくプロジェクトに属するので、必ず全カットで同じになります。
+
+![スタイルバイブルの効果](docs/style-bible.png)
+
+### 操作画面
+
+![操作パネル](docs/ui.png)
+
+*左: 参照画像から拾ったパレットと禁止表現。右: カットごとの字幕、AIによる字幕生成、クラウド保存、フック／テンポの自動レビュー。*
+
 ## プロダクトコンセプト
 
 NOIZ LABが目指すのは、**素材を入れて雰囲気を選ぶだけで、SNSへ出せる動画が完成する、より簡単な動画編集ツール**です。
@@ -317,6 +331,11 @@ node scripts/noizlab-effect.mjs input.jpg output.png --preset CINEMA
 node scripts/noizlab-effect.mjs input.jpg output.png --preset FILM --ratio 9:16 --text '夏の終わり|1999'
 node scripts/noizlab-effect.mjs --video 1.png 2.png 3.png ending.mp4 \
   --preset FILM --ratio 16:9 --transition film-burn --hold 1.4 --duration 0.8
+
+# カットごとの字幕とスタイルバイブルを効かせてGIFにする（READMEのデモはこれで作りました）
+node scripts/noizlab-effect.mjs --video 1.png 2.png 3.png demo.gif --gif \
+  --palette reference.png --palette-mix 0.4 \
+  --caption '夏の終わりに全部捨てた|理由は一つだけ|最後まで見てほしい'
 node scripts/noizlab-variety-video.mjs ending.mp4 \
   1.jpg@FILM 2.jpg@DREAM 3.jpg@NEON 4.jpg@CINEMA \
   --transitions film-burn,flash,push

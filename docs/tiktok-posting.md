@@ -71,13 +71,59 @@ NOIZ LABでどう効くか: 作った動画のTikTok版を、ギャラリーや�
 
 | | なぜ |
 | --- | --- |
-| **Share Kit** | iOS/AndroidのSDK前提。ブラウザで完結するNOIZ LABからは呼べない |
+| **Share Kit** | iOS/AndroidのSDK前提。ブラウザで完結するNOIZ LABからは呼べない（ネイティブアプリなら話は逆。下記参照） |
 | **Research API** | 非営利の学術機関の研究者向け。研究計画書・倫理審査・所属の証明が要り、対象は米国と欧州。EUのDSAに基づく審査済み研究者向けの枠は別立て。`view_count` などの統計を**他人の公開動画**まで広げて取れるが、このプロジェクトの立場では申請できない |
 | **Data Portability API** | 利用者本人のアーカイブ書き出し（活動・投稿・DM）。ツールの用途と噛み合わない |
 | **Mini Games / Local Service** | 用途が別物 |
 
 なお `video.list` で読めるのは**連携した本人の公開動画**だけです。他人の動画の数字を集めるには
 Research API が要る、という線引きになっています。
+
+### ネイティブアプリなら — Share Kit
+
+NOIZ LAB本体はブラウザなので使えませんが、**同じ素材をiOS/Androidのアプリから出すなら
+Share Kitのほうが圧倒的に楽**です。別プロジェクトでネイティブの動画編集ツールを作る場合に効きます。
+
+アプリで作った動画・画像をTikTokアプリへ渡し、TikTokの編集画面で本人が仕上げて投稿する、
+という形のSDKです。「投稿する」のではなく「投稿画面まで連れていく」もの。
+
+| | Share Kit | Content Posting API |
+| --- | --- | --- |
+| 対象 | モバイルアプリ（ネイティブSDK） | Webアプリ・サーバー |
+| 認証 | **`client_key` だけ。OAuthもスコープも不要** | OAuth ＋ スコープ |
+| 審査 | **ドキュメント上、記載なし** | 直接投稿は必須（通るまで公開範囲は自分だけ） |
+| 一度に | **最大35点** | 動画1本 |
+| レート制限 | 記載なし | 6リクエスト/分・24時間で保留5件 |
+| 仕上げ | TikTokの編集画面で本人が | APIで完結できる |
+| 数字の読み戻し | できない | **`video.list` で可能** |
+
+**メリット**
+- **OAuthを実装しなくていい。** トークンの保管・更新・失効の面倒が丸ごと消え、サーバーすら要らない
+- 審査待ちがない
+- **一度に35点渡せる。** 自動カット編集なら「候補を数本書き出して選ばせる」ができる
+- TikTokのエフェクト・音源・ハッシュタグがそのまま使える（自分のアプリで音楽を持たなくていい）
+- グリーンスクリーン（`shareFormat = GREEN_SCREEN`）で、渡した1点を背景に本人の顔を乗せた状態で開ける
+
+**制約とハマりどころ**
+- **iOSはファイルパスではなく PHAsset の `localIdentifier` を渡す。**
+  一度フォトライブラリへ保存する必要があり、Photosの権限も要る。
+  書き出し → 保存 → identifier取得 → 渡す、という段が挟まるので設計に効く
+- Androidは media path（content URI）
+- iOS: 画像35 / 動画12、アスペクト比 1/2.2〜2.2、尺は最大10分（地域による）
+- Android: `.mp4` のみ、1〜360秒、最大フレームサイズ1100px、最大35本
+- グリーンスクリーンはメディア1点のみ。TikTok 25.0.0以降
+- TikTokアプリが端末に入っている前提。入っていないときのフォールバックは自前
+- iOSは `LSApplicationQueriesSchemes` に `tiktoksharesdk`（Login Kitなら `tiktokopensdk`）、
+  Android 11+ は manifest の `queries` にパッケージを書く
+
+**Flutterから使う場合**: 公式のFlutter SDKはありません。コミュニティのラッパー
+（`tiktok_sdk_v2` / `flutter_tiktok_sdk` / `appinio_social_share` など）があります。
+メンテ状況が読めないなら、MethodChannelで薄く自前ラップするほうが確実です。呼ぶAPIは数えるほどしかありません。
+
+> **出すのは Share Kit、学ぶのは Display API。**
+> Share KitはOAuthを丸ごと省けますが、投稿した動画の再生数までは取れません。
+> 「どのカット割りが伸びたか」をアプリへ返したいなら、Login Kit + `video.list` を別に足すことになります。
+> 逆に言えば、出すだけなら今日から動きます。
 
 ### 費用
 
@@ -257,4 +303,8 @@ R2に一時的に置く場合は、既存の共有画像と同じく**期限を�
 - [Video Object](https://developers.tiktok.com/doc/tiktok-api-v2-video-object)
 - [Scopes](https://developers.tiktok.com/doc/tiktok-api-scopes/)
 - [Embed Videos / oEmbed](https://developers.tiktok.com/doc/embed-videos/)
+- [Share Kit](https://developers.tiktok.com/products/share-kit)
+- [Share Kit for iOS](https://developers.tiktok.com/doc/share-kit-ios-quickstart-v2)
+- [Share Kit for Android](https://developers.tiktok.com/doc/share-kit-android-quickstart-v2)
+- [Green Screen Kit](https://developers.tiktok.com/doc/green-screen-kit)
 - [Research Tools: Access and Eligibility](https://developers.tiktok.com/products/research-api/)

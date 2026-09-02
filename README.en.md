@@ -272,6 +272,7 @@ npx wrangler deploy
 
 node scripts/test-project-format.mjs   # Project JSON round-trip
 node scripts/test-mcp-server.mjs       # MCP tools and JSON-RPC over stdio
+node scripts/test-web-app.mjs          # regression test that renders in headless Chrome
 ```
 
 ## About cost

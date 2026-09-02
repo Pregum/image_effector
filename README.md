@@ -301,6 +301,7 @@ npx wrangler deploy   # デプロイ
 
 node scripts/test-project-format.mjs   # Project JSONの往復テスト
 node scripts/test-mcp-server.mjs       # MCPツールとstdio越しのJSON-RPC
+node scripts/test-web-app.mjs          # headless Chromeで実際に描画させる回帰テスト
 ```
 
 ### Codex / Claude Code から画像を加工

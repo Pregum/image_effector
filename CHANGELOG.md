@@ -26,6 +26,13 @@
 - **エフェクトの並び替え**: COLOR系9段（ハレーション〜ビネット）の適用順をドラッグで変更
 - **Motion Grammarの変形技法**: スタイル変換・形状変形・図形置換をレンダラーで実装
 
+### テスト
+- `scripts/test-web-app.mjs` を追加。public/ を複製して検証コードを足し、headless Chromeで
+  実際に描画させた結果を検査する18項目の回帰テスト。配列uniformがシェーダへ届かない、
+  module冒頭のTDZで以降が実行されない、Project JSONの往復で編集内容が落ちる、
+  字幕が焼き込まれない、といったコードを読むだけでは気づけない壊れ方を捕まえる
+  （Chromeが無い環境ではスキップ。`CHROME_BIN` で場所を指定できる）
+
 ### ドキュメント
 - [TikTok投稿の手順](docs/tiktok-posting.md)を追加。開発者アプリの登録から
   OAuth・下書き保存・直接投稿までの段取りと、NOIZ LAB側に足すルート・テーブル・
@@ -58,6 +65,9 @@
   project level. A new colour stage, palette lock, pulls every cut toward that palette, so cuts
   from different sources share one colour identity. AI image generation gets the same palette
   and avoid-list.
+- Added `scripts/test-web-app.mjs`: 18 regression checks that render the real app in headless
+  Chrome, covering array uniforms reaching the shader, module initialisation, Project JSON
+  round-trips and caption burn-in. Skipped when no Chrome is found.
 - Added [a walkthrough for TikTok posting](docs/tiktok-posting.md): developer-app registration,
   OAuth, draft upload and direct post, plus the routes, table and secrets NOIZ LAB would need.
   Not implemented yet.

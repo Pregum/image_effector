@@ -198,6 +198,7 @@ const EN = {
   "この構成ではAI機能を使えません。": "AI features are not available in this deployment.",
   "クリップを2カットに分割しました。": "Split the clip into two cuts.",
   "分割するには0.4秒以上の長さが必要です。": "The clip needs to be at least 0.4s to split.",
+  "参照パレット": "Reference palette",
   "STYLE BIBLE": "STYLE BIBLE",
   "／ カット間の一貫性": "/ consistency across cuts",
   "参照画像から色を拾う": "Pick colors from a reference",

@@ -1356,6 +1356,7 @@ function updateCropGuide() {
   guide.style.height = gh + "px";
 }
 window.addEventListener("resize", updateCropGuide);
+window.addEventListener("resize", () => updateCaptionPreview());
 
 document.getElementById("btn-save").addEventListener("click", () => {
   if (!originalData) return;
@@ -1718,6 +1719,186 @@ function updateSeqNote() {
     : "「＋ 今の画像」でカットを並べてください。";
 }
 
+// ---------------------------------------------------------------- カット字幕
+// 無音再生でも内容が伝わるよう、カットごとに1行の字幕を持たせる。
+// プレビューはcanvas上のHTML、書き出しは出力用2Dキャンバスへ焼き込む。
+let captionLang = (() => { try { return localStorage.getItem("nl_lang") === "en" ? "en" : "ja"; } catch { return "ja"; } })();
+const $cap = {
+  get preview() { return document.getElementById("caption-preview"); },
+  get box() { return document.getElementById("clip-caption"); },
+  get input() { return document.getElementById("caption-input"); },
+  get theme() { return document.getElementById("caption-theme"); },
+  get aiBtn() { return document.getElementById("btn-captions-ai"); },
+};
+const CAPTION_FONT = "'Zen Kaku Gothic New', sans-serif";
+let seqCaptionText = ""; // いま表示すべき字幕。frame()とGIFループが更新する
+
+function captionAt(s) {
+  // 転換中は、後半に入ったら次カットの字幕へ切り替える
+  return (slides[s.t < 0.5 ? s.a : s.b]?.caption || "").trim();
+}
+
+// 日本語は単語境界が無いので、幅を測りながら1文字ずつ折る
+function wrapCaption(ctx, text, maxWidth, maxLines = 2) {
+  const lines = [];
+  let line = "";
+  for (const ch of text) {
+    if (ch === "\n") { lines.push(line); line = ""; continue; }
+    const next = line + ch;
+    if (line && ctx.measureText(next).width > maxWidth) {
+      lines.push(line);
+      line = ch;
+      if (lines.length === maxLines) break;
+    } else {
+      line = next;
+    }
+  }
+  if (line && lines.length < maxLines) lines.push(line);
+  return lines.slice(0, maxLines);
+}
+
+function drawCaption(ctx, w, h, text) {
+  const str = (text || "").trim();
+  if (!str) return;
+  const size = Math.max(12, Math.round(h * 0.045));
+  ctx.save();
+  ctx.font = `800 ${size}px ${CAPTION_FONT}`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "alphabetic";
+  const lines = wrapCaption(ctx, str, w * 0.9);
+  const lh = size * 1.35;
+  let y = h * 0.93 - (lines.length - 1) * lh;
+  ctx.lineJoin = "round";
+  ctx.lineWidth = Math.max(2, size * 0.16);
+  ctx.strokeStyle = "#000";
+  ctx.fillStyle = "#fff";
+  for (const line of lines) {
+    ctx.strokeText(line, w / 2, y);
+    ctx.fillText(line, w / 2, y);
+    y += lh;
+  }
+  ctx.restore();
+}
+
+
+// 書き出しの中央クロップと同じ枠にプレビューを合わせる（見た目と出力を一致させる）
+function updateCaptionPreview() {
+  const el = $cap.preview;
+  if (!el) return;
+  if (!seqCaptionText || !originalData) { el.hidden = true; return; }
+  const cw = canvas.clientWidth, ch = canvas.clientHeight;
+  if (!cw || !ch) { el.hidden = true; return; }
+  let gw = cw, gh = ch;
+  if (exportRatio) {
+    const imgR = cw / ch;
+    if (exportRatio > imgR) gh = cw / exportRatio;
+    else gw = ch * exportRatio;
+  }
+  const left = canvas.offsetLeft + (cw - gw) / 2;
+  const top = canvas.offsetTop + (ch - gh) / 2;
+  el.hidden = false;
+  el.textContent = seqCaptionText;
+  el.style.left = `${left + gw * 0.05}px`;
+  el.style.width = `${gw * 0.9}px`;
+  el.style.top = `${top + gh * 0.78}px`;
+  el.style.fontSize = `${Math.max(11, gh * 0.045)}px`;
+}
+
+function setSeqCaption(text) {
+  const next = text || "";
+  if (next === seqCaptionText) return;
+  seqCaptionText = next;
+  updateCaptionPreview();
+}
+
+$cap.input?.addEventListener("input", () => {
+  const s = slides[selectedSlide];
+  if (!s) return;
+  s.caption = $cap.input.value;
+  updateCaptionCount();
+});
+
+function updateCaptionCount() {
+  const n = slides.filter((s) => (s.caption || "").trim()).length;
+  const el = document.getElementById("clip-caption-count");
+  if (el) el.textContent = slides.length ? `${n}/${slides.length}` : "";
+}
+
+
+function updateCaptionsAiBtn() {
+  const btn = $cap.aiBtn;
+  if (!btn) return;
+  btn.disabled = !slides.length || !($cap.theme?.value || "").trim() || !!seqPlaying;
+}
+$cap.theme?.addEventListener("input", updateCaptionsAiBtn);
+
+async function generateCaptions() {
+  const theme = ($cap.theme?.value || "").trim();
+  if (!theme || !slides.length) return;
+  const btn = $cap.aiBtn;
+  btn.disabled = true;
+  const label = btn.textContent;
+  btn.textContent = t("生成中…");
+  try {
+    const res = await fetch("/api/captions", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        theme,
+        language: captionLang,
+        cuts: slides.map((s) => ({ duration: slideDurationMs(s) / 1000, kind: s.kind })),
+      }),
+    });
+    if (res.status === 429) { transNote.textContent = t("リクエストが多すぎます。1分ほど待ってから再試行してください。"); return; }
+    if (res.status === 503) { transNote.textContent = t("本日のAI生成の無料枠を使い切りました。日本時間 朝9時にリセットされます。"); return; }
+    if (res.status === 501) { transNote.textContent = t("この構成ではAI機能を使えません。"); return; }
+    if (!res.ok) throw new Error(String(res.status));
+    const { captions } = await res.json();
+    slides.forEach((s, i) => { s.caption = String(captions[i] || "").trim(); });
+    if (slides[selectedSlide]) $cap.input.value = slides[selectedSlide].caption || "";
+    updateCaptionCount();
+    transNote.textContent = t("字幕を生成しました。カットを選んで手直しできます。");
+  } catch {
+    transNote.textContent = t("字幕の生成に失敗しました。再試行してください。");
+  } finally {
+    btn.textContent = label;
+    updateCaptionsAiBtn();
+  }
+}
+$cap.aiBtn?.addEventListener("click", generateCaptions);
+
+// ---- 動画クリップの分割
+// 長い素材を1カットのまま置くとテンポが死ぬので、トリム範囲の中央で2カットに割る。
+// 同じ素材Blobを共有し、トリム範囲だけを分けて持つ。
+async function splitSelectedClip() {
+  const i = selectedSlide;
+  const s = slides[i];
+  if (!s || s.kind !== "video") return;
+  if (slides.length >= MAX_SLIDES) {
+    transNote.textContent = `カットは最大${MAX_SLIDES}個までです。`;
+    return;
+  }
+  const mid = (s.trimStart + s.trimEnd) / 2;
+  if (mid - s.trimStart < 0.2 || s.trimEnd - mid < 0.2) {
+    transNote.textContent = t("分割するには0.4秒以上の長さが必要です。");
+    return;
+  }
+  const tail = {
+    assetId: s.assetId, // 同じ素材を2カットで共有し、trimだけ分ける
+    name: s.name, recipe: s.recipe, trimStart: mid, trimEnd: s.trimEnd,
+    motion: s.motion, surface: (s.surface || []).slice(),
+    transitionOut: s.transitionOut, caption: "",
+  };
+  s.trimEnd = mid;
+  s.transitionOut = null; // 分割点は一括選択のつなぎに従わせる
+  await addSlideVideo(s.sourceBlob, tail);
+  const [moved] = slides.splice(slides.length - 1, 1);
+  slides.splice(i + 1, 0, moved);
+  selectSlide(i + 1);
+  transNote.textContent = t("クリップを2カットに分割しました。");
+}
+document.getElementById("clip-split")?.addEventListener("click", splitSelectedClip);
+
 function renderSlideStrip() {
   slideStrip.innerHTML = "";
   slides.forEach((s, i) => {
@@ -1754,6 +1935,9 @@ function renderSlideStrip() {
     });
     slideStrip.appendChild(d);
   });
+  if ($cap.box && !slides[selectedSlide]) $cap.box.hidden = true;
+  updateCaptionCount();
+  updateCaptionsAiBtn();
   updateSeqNote();
 }
 
@@ -1761,6 +1945,15 @@ function selectSlide(i) {
   selectedSlide = i;
   const s = slides[i];
   clipTrim.hidden = s?.kind !== "video";
+  const box = $cap.box;
+  if (box) {
+    box.hidden = !s;
+    if (s) {
+      document.getElementById("clip-caption-name").textContent = `CUT ${i + 1}`;
+      $cap.input.value = s.caption || "";
+      updateCaptionCount();
+    }
+  }
   if (s?.kind === "video") {
     document.getElementById("clip-trim-name").textContent = s.name || `動画 ${i + 1}`;
     document.getElementById("clip-trim-length").textContent = `${s.duration.toFixed(1)}s`;
@@ -1793,13 +1986,13 @@ async function ensureEditorBase(source) {
   await loadBlob(await canvasBlob(c, "image/png"));
 }
 
-async function addSlideBitmap(bmp, recipe = null, sourceBlob = null, assetId = createAssetId(), motion = null, surface = [], transitionOut = null) {
+async function addSlideBitmap(bmp, recipe = null, sourceBlob = null, assetId = createAssetId(), motion = null, surface = [], transitionOut = null, caption = "") {
   if (slides.length >= MAX_SLIDES) {
     transNote.textContent = `カットは最大${MAX_SLIDES}枚までです。`;
     return;
   }
   await ensureEditorBase(bmp);
-  const s = { kind: "image", assetId, bmp, sourceBlob: sourceBlob || await bitmapBlob(bmp), tex: makeTex(), thumb: null, recipe, override: null, textTex: null, motion, surface, transitionOut };
+  const s = { kind: "image", assetId, bmp, sourceBlob: sourceBlob || await bitmapBlob(bmp), tex: makeTex(), thumb: null, recipe, override: null, textTex: null, motion, surface, transitionOut, caption: caption || "" };
   uploadSlide(s);
   buildSlideOverride(s);
   const tc = document.createElement("canvas");
@@ -1857,6 +2050,7 @@ async function addSlideVideo(blob, saved = {}) {
     override: null, textTex: null, mediaCanvas: null, motion: saved.motion || null,
     surface: saved.surface || [],
     transitionOut: saved.transitionOut || null,
+    caption: saved.caption || "",
   };
   uploadSlide(s);
   buildSlideOverride(s);
@@ -1942,8 +2136,14 @@ function projectRenderSize() {
 function buildProjectManifest(sourceKind = "indexeddb") {
   const updatedAt = new Date().toISOString();
   const renderSize = projectRenderSize();
-  const assets = slides.map((s) => ({
-    id: s.assetId ||= createAssetId(),
+  const seenAssets = new Set();
+  const assets = slides.filter((s) => {
+    const id = (s.assetId ||= createAssetId());
+    if (seenAssets.has(id)) return false;
+    seenAssets.add(id);
+    return true;
+  }).map((s) => ({
+    id: s.assetId,
     type: s.kind,
     name: s.name || `${s.kind}-${s.assetId}`,
     mime: s.sourceBlob?.type || (s.kind === "video" ? "video/mp4" : "image/webp"),
@@ -2012,7 +2212,9 @@ function buildProjectManifest(sourceKind = "indexeddb") {
       beatDivision: bpmBeats,
       tracks,
     },
-    captions: activeProject.captions || [],
+    captions: slides
+      .map((s, i) => ({ cutIndex: i, text: (s.caption || "").trim(), language: captionLang }))
+      .filter((c) => c.text),
     render: { ...renderSize, fps: 30, codec: "h264", container: "mp4" },
   });
 }
@@ -2192,8 +2394,14 @@ async function restoreProject(manifest, storedBlobs = {}) {
     b.classList.toggle("sel", Number(b.dataset.mode) === seqState.mode));
   const ratioValue = { original: "0", "16:9": "1.77778", "1:1": "1", "9:16": "0.5625" }[manifest.canvas.ratio] || "0";
   ratioSeg.querySelector(`button[data-r="${ratioValue}"]`)?.click();
+  for (const cap of manifest.captions || []) {
+    const target = slides[cap.cutIndex];
+    if (target && !target.caption) target.caption = String(cap.text || "");
+    if (cap.language) captionLang = String(cap.language).slice(0, 16);
+  }
   selectedSlide = -1;
   clipTrim.hidden = true;
+  if ($cap.box) $cap.box.hidden = true;
   renderSlideStrip();
 }
 
@@ -2472,7 +2680,10 @@ async function exportSequence() {
       start: performance.now(),
       hold: seqState.hold * 1000,
       trans: seqState.trans * 1000,
-      blit: () => cctx.drawImage(canvas, sx, sy, sw, sh, 0, 0, ow, oh),
+      blit: () => {
+        cctx.drawImage(canvas, sx, sy, sw, sh, 0, 0, ow, oh);
+        drawCaption(cctx, ow, oh, seqCaptionText);
+      },
     };
     if (audioSrc) audioSrc.start();
     markDirty();
@@ -2509,6 +2720,7 @@ async function exportSequence() {
     pauseSequenceVideos();
     seqFrame = null;
     seqOverride = null;
+    setSeqCaption("");
     markDirty();
     transBtn.textContent = t("▶ 動画書き出し (MP4)");
     // 結果メッセージを残すため、ここではボタン状態のみ戻す
@@ -2705,6 +2917,7 @@ async function exportGif() {
       seqOverride = overrideFor(s.a, s.b, s.t);
       render(tMs / 1000); // 仮想時刻。ウィンドウが隠れていても進む
       octx.drawImage(canvas, sx, sy, sw, sh, 0, 0, ow, oh);
+      drawCaption(octx, ow, oh, captionAt(s));
       frames.push(octx.getImageData(0, 0, ow, oh));
       if (f % 6 === 5) {
         gifBtn.textContent = `描画中 ${f + 1}/${count}`;
@@ -3426,6 +3639,7 @@ function frame() {
       anchor: s.anchor,
     };
     seqOverride = overrideFor(s.a, s.b, s.t);
+    setSeqCaption(captionAt(s));
     dirty = true;
     if (el >= total + 300 && seqPlaying.onend) {
       const f = seqPlaying.onend;
@@ -3458,9 +3672,11 @@ function frame() {
         anchor: s.anchor,
       };
       seqOverride = overrideFor(s.a, s.b, s.t);
+      setSeqCaption(captionAt(s));
       dirty = true;
     }
   }
+  if (!seqPlaying && !previewMode && seqCaptionText) setSeqCaption("");
   const needsAnim = animate && originalData &&
     ((enabled.glitch && state.glitch > 0) ||
      (enabled.grain && state.noise > 0) ||

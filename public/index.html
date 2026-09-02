@@ -79,6 +79,7 @@
     <div class="stage-inner">
       <canvas id="view"></canvas>
       <div id="crop-guide" hidden></div>
+      <div id="caption-preview" hidden></div>
       <div class="drop-hint" id="drop-hint">
         <p class="drop-hint-en">DROP IMAGE HERE</p>
         <p>画像をドラッグ＆ドロップ / 貼り付け（⌘V）でも読み込めます</p>
@@ -167,11 +168,20 @@
         <button id="slide-add" class="btn">＋ 今の画像</button>
         <button id="slide-add-file" class="btn">＋ 画像・動画</button>
       </div>
+      <div class="clip-caption" id="clip-caption" hidden>
+        <div class="clip-trim-head"><span id="clip-caption-name">CUT</span><span id="clip-caption-count"></span></div>
+        <input id="caption-input" type="text" maxlength="60" placeholder="このカットの字幕（無音でも伝わる一言）" />
+      </div>
+      <div class="caption-ai">
+        <input id="caption-theme" type="text" maxlength="200" placeholder="動画のテーマ（例: 夏の終わりのドライブ）" />
+        <button id="btn-captions-ai" class="btn" disabled>✎ AIで字幕を作る</button>
+      </div>
       <div class="clip-trim" id="clip-trim" hidden>
         <div class="clip-trim-head"><span id="clip-trim-name">動画クリップ</span><span id="clip-trim-length"></span></div>
         <div class="clip-trim-fields">
           <label>開始 <input id="clip-trim-start" type="number" min="0" step="0.1" /></label>
           <label>終了 <input id="clip-trim-end" type="number" min="0.1" step="0.1" /></label>
+          <button id="clip-split" class="btn" type="button">✂ 半分で分割</button>
         </div>
         <p class="text-hint">サムネイルを選ぶとトリムできます。動画音声は現在BGMへ置き換えて書き出します。</p>
       </div>

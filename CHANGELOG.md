@@ -3,6 +3,40 @@
 このプロジェクトの主な変更点を記録します。
 *Notable changes to this project. English summary follows the Japanese section of each release.*
 
+## [1.2.0] — 2026-09-02
+
+### 追加
+- **カット字幕**: カットごとに1行の字幕を持てるように。プレビューにも重なり、MP4/GIFの
+  書き出しに焼き込まれる（縁取り付き・日本語は1文字ずつ折り返して最大2行）
+- **AIで字幕を作る**: テーマを1行入れると、カット数と尺に合わせて全カット分の字幕を生成
+  （`POST /api/captions`。無音でも伝わること、1カット目をフックにすることを条件に指定）
+- **動画クリップの分割**: 選択中の動画クリップをトリム範囲の中央で2カットに分割。
+  素材は共有したまま `trim` だけを分けるので、プロジェクトJSONのサイズは増えない
+- **動画のレビュー**: MCPの `review_hook_and_pacing` と同じ基準を Web UI からも実行できるように。
+  冒頭・尺・緩急・字幕・縦横比を検査し、スコアと指摘を並べる
+- **エフェクトの並び替え**: COLOR系9段（ハレーション〜ビネット）の適用順をドラッグで変更
+- **Motion Grammarの変形技法**: スタイル変換・形状変形・図形置換をレンダラーで実装
+
+### 変更
+- 判定ロジック `reviewProject()` を `public/project-format.js` へ移し、ブラウザとMCPで共有
+- Project JSONの `captions` を編集画面の状態から生成し、読み込み時にカットへ戻すように
+- 同じ素材を複数カットが参照する場合、`assets` を重複排除するように
+
+---
+
+### English summary
+
+- **Per-cut captions**: each cut can carry a one-line caption. It shows in the preview and is
+  burned into MP4 / GIF exports, outlined, wrapped character by character for Japanese.
+- **AI captions**: type a one-line theme and get a caption for every cut, sized to its duration
+  (`POST /api/captions`). The model is told they must work with the sound off and that cut 1 is the hook.
+- **Clip splitting**: split the selected video clip in half. Both halves share one asset and differ
+  only by `trim`, so the project JSON does not grow.
+- **Video review**: the Web UI can now run the same checks as the MCP `review_hook_and_pacing`
+  (opening, length, pacing, captions, aspect ratio) and lists the findings with a score.
+- **Effect reordering**: drag to reorder the nine colour stages, halation through vignette.
+- **Motion Grammar transformation techniques**: style transformation, shape morph and graphic substitution.
+
 ## [1.1.1] — 2026-09-02
 
 ### 変更

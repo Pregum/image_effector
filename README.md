@@ -364,8 +364,8 @@ MIT License（[LICENSE](LICENSE)）。
 - [x] Motion Grammarのカメラ系5技法をレンダラーで実装（他は技法名を保持してフォールバック）
 - [x] Motion Grammarの表面表現（網点・版ズレ）をカメラの動きへ重ねる
 - [x] Motion Grammarの接続技法（マスク展開・放射ワイプ・シルエット接続・マッチカット）
-- [ ] Motion Grammarの変形技法（形状変形、図形置換、スタイル変換）
-- [ ] 字幕生成、分割、カット別トランジション、フック／テンポの自動レビュー
+- [x] Motion Grammarの変形技法（形状変形、図形置換、スタイル変換）
+- [x] 字幕生成、分割、カット別トランジション、フック／テンポの自動レビュー
 - [x] 共通Project JSONと素材埋め込み入出力
 - [x] MCPとWeb版のプロジェクト往復（素材埋め込みJSON経由）
 - [ ] クラウド同期（Web / Desktop / Mobile）
@@ -373,5 +373,5 @@ MIT License（[LICENSE](LICENSE)）。
 - [x] MCPからのAI絵コンテ生成（自前で書く／サーバーのLLMに書かせる）
 - [x] MCPからの不足素材のAI生成
 - [ ] TikTok Content Posting APIを使った下書き／直接投稿
-- [ ] エフェクトの並び替え（現在は適用順が固定。COLOR GRADEのみ前後を切替可）
+- [x] エフェクトの並び替え（COLOR系9段の適用順をドラッグで入れ替え）
 - [ ] AI img2img（無料枠で動くモデルが見つからず保留）

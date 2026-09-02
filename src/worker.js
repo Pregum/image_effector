@@ -953,6 +953,70 @@ const STORYBOARD_SYSTEM = [
   "imagePrompt is always English regardless of the brief language, and must describe a still image with no text in it.",
 ].join("\n");
 
+const CAPTIONS_SYSTEM = [
+  "You write on-screen captions for a short-form video (Reels / Shorts / TikTok).",
+  "Reply with ONLY minified JSON. No code fences, no explanations.",
+  'Schema: {"captions":["cut1","cut2","..."]}',
+  "Return EXACTLY one caption per cut, in cut order.",
+  "Captions must work with the sound off: together they should tell the whole story.",
+  "The FIRST caption is the hook. It has to stop the scroll on its own.",
+  "Keep each caption to at most 20 characters for Japanese, 40 for other languages.",
+  "No quotation marks, no hashtags, no numbering, no trailing punctuation.",
+  "Write them in the requested caption language.",
+].join("\n");
+
+async function captionsRoute(req, env, ai) {
+  if (!(await rateLimit(env, clientIp(req) + "#captions", 10))) {
+    return json({ error: "rate limited" }, 429);
+  }
+  let body;
+  try {
+    body = await req.json();
+  } catch {
+    return json({ error: "invalid json" }, 400);
+  }
+  const theme = body?.theme;
+  if (typeof theme !== "string" || !theme.trim() || theme.length > 500) {
+    return json({ error: "invalid theme" }, 400);
+  }
+  const cuts = Array.isArray(body?.cuts) ? body.cuts.slice(0, 8) : [];
+  if (!cuts.length) return json({ error: "no cuts" }, 400);
+  const language = String(body?.language ?? "ja").slice(0, 16);
+
+  const userMsg = [
+    `Theme: ${theme.trim()}`,
+    `Caption language: ${language}`,
+    `Cut count: ${cuts.length}`,
+    ...cuts.map((c, i) => {
+      const dur = Number(c?.duration) > 0 ? Math.min(60, Number(c.duration)).toFixed(1) : "1.0";
+      const kind = c?.kind === "video" ? "video" : "still";
+      return `Cut ${i + 1}: ${dur}s, ${kind}`;
+    }),
+  ].join("\n");
+
+  if (!(await spendAiBudget(env, AI_COST.llm70b)).ok) return budgetExceeded();
+
+  try {
+    const raw = await ai.chat({ system: CAPTIONS_SYSTEM, user: userMsg, maxTokens: 500 });
+    const parsed = raw && typeof raw === "object" ? raw : extractJson(String(raw ?? ""));
+    const list = Array.isArray(parsed?.captions) ? parsed.captions : null;
+    if (!list || !list.length) {
+      console.error("captions parse failed:", String(raw).slice(0, 200));
+      return json({ error: "parse failed" }, 502);
+    }
+    // カット数に合わせて詰める。多い分は捨て、足りない分は空文字で埋める
+    const captions = cuts.map((_, i) => String(list[i] ?? "").replace(/^["'\s]+|["'\s]+$/g, "").slice(0, 60));
+    return json({ captions, language });
+  } catch (e) {
+    const msg = e?.message ?? String(e);
+    console.error("captions failed:", msg);
+    if (msg.includes("4006") || msg.includes("neurons")) {
+      return json({ error: "quota exceeded" }, 503);
+    }
+    return json({ error: "captions failed" }, 500);
+  }
+}
+
 async function storyboardRoute(req, env, ai) {
   if (!(await rateLimit(env, clientIp(req) + "#storyboard", 10))) {
     return json({ error: "rate limited" }, 429);
@@ -1146,6 +1210,11 @@ export default {
     if (pathname === "/api/assets" && req.method === "POST") {
       if (!ai) return disabled("ai");
       return tracked(env, req, "ai_assets", assetsRoute(req, env, ai));
+    }
+
+    if (pathname === "/api/captions" && req.method === "POST") {
+      if (!ai) return disabled("ai");
+      return tracked(env, req, "ai_captions", captionsRoute(req, env, ai));
     }
 
     if (pathname === "/api/storyboard" && req.method === "POST") {

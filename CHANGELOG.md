@@ -3,6 +3,29 @@
 このプロジェクトの主な変更点を記録します。
 *Notable changes to this project. English summary follows the Japanese section of each release.*
 
+## [1.1.1] — 2026-09-02
+
+### 変更
+- 文字入れの書体を3種から**8種**に拡張（極太・明朝・丸ゴ・ポップ・レゲエを追加）
+- シェア時に黙ってフォールバックしていた挙動をやめ、いま何が起きているかを表示するように
+- AI生成した画像は、ギャラリーのアクセスキーが無くても**画像付きの共有リンク**で投稿できるように
+
+### 修正
+- 英語UIに日本語が残っていた27件を翻訳（動画クリップのトリム、トランジション4種、
+  かんたん動画の3ステップ、`file://` で開いたときの警告、Project JSON関連のメッセージ）
+- `aria-label` も翻訳対象に追加
+
+---
+
+### English summary
+
+- Thumbnail text now offers **8 typefaces** (heavy, mincho, rounded, pop and reggae added).
+- Sharing no longer falls back silently; it reports what it is doing.
+- AI-generated images can be shared with an image card even without a gallery access key.
+- Fixed 27 strings that stayed Japanese in the English UI (clip trimming, four transitions,
+  the three-step video guide, the `file://` warning, Project JSON messages), and
+  `aria-label` is now translated as well.
+
 ## [1.1.0] — 2026-08-31
 
 Webのエディタに加えて、**エージェントやコマンドラインから扱える制作環境**が加わりました。

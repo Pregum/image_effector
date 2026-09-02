@@ -7,6 +7,10 @@ All image processing runs in **WebGL2 on the client**. The backend is optional a
 fits in a single Cloudflare Worker. **No dependencies** — the pixel sorter, the GIF
 encoder and the force-directed graph are all written from scratch. MIT licensed.
 
+[![test](https://github.com/Pregum/image_effector/actions/workflows/test.yml/badge.svg)](https://github.com/Pregum/image_effector/actions/workflows/test.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-c8ff00.svg)](LICENSE)
+![dependencies: none](https://img.shields.io/badge/dependencies-none-c8ff00.svg)
+
 [日本語版 README](README.md) ／ **Live instance**: https://image-effector.pregum-dev.workers.dev
 （[about page](https://image-effector.pregum-dev.workers.dev/about-en)）
 
@@ -287,6 +291,12 @@ at a commercial API, will bill you according to that provider's pricing.
 ## Changelog
 
 See [CHANGELOG.md](CHANGELOG.md).
+
+## Contributing
+
+Issues and pull requests are welcome, in Japanese or English. The ground rules — no dependencies,
+stay inside free tiers, Japanese is the source language for the UI — are in
+[CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License and rights
 

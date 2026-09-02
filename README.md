@@ -5,6 +5,10 @@
 
 **[English README](README.en.md)** — *A browser-based glitch/Y2K image effect studio. All image processing runs in WebGL2 on the client; the optional backend is a single Cloudflare Worker. No dependencies, MIT licensed.*
 
+[![test](https://github.com/Pregum/image_effector/actions/workflows/test.yml/badge.svg)](https://github.com/Pregum/image_effector/actions/workflows/test.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-c8ff00.svg)](LICENSE)
+![dependencies: none](https://img.shields.io/badge/dependencies-none-c8ff00.svg)
+
 **作者のインスタンス**: https://image-effector.pregum-dev.workers.dev
 （[説明ページ](https://image-effector.pregum-dev.workers.dev/about)）
 
@@ -349,6 +353,10 @@ MIT License（[LICENSE](LICENSE)）。
 ## 変更履歴
 
 [CHANGELOG.md](CHANGELOG.md) を参照してください。
+
+## コントリビュート
+
+IssueもPull Requestも歓迎します。決めごと（依存を増やさない・無料枠の範囲で動かす・日本語がUIの原文）は[CONTRIBUTING.md](CONTRIBUTING.md)にまとめてあります。
 
 ## ロードマップ
 

@@ -403,6 +403,7 @@ IssueもPull Requestも歓迎します。決めごと（依存を増やさない
 - [x] MCPからの不足素材のAI生成
 - [ ] TikTok Content Posting APIを使った下書き／直接投稿
   （TikTok側で開発者アプリの登録と審査、利用者のOAuth連携が必要なため未着手。
-  段取りは[TikTok投稿の手順](docs/tiktok-posting.md)にまとめてあります）
+  [TikTok APIでできること一覧と、つなぐ手順](docs/tiktok-posting.md)にまとめてあります。
+  oEmbedによる埋め込みだけは登録も審査も不要で、いつでも入れられます）
 - [x] エフェクトの並び替え（COLOR系9段の適用順をドラッグで入れ替え）
 - [ ] AI img2img（無料枠で動くモデルが見つからず保留）

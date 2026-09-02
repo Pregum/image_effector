@@ -823,3 +823,23 @@ body.embed #view { max-height: 100vh; border: none; box-shadow: none; }
 }
 #caption-theme:focus { outline: none; border-color: var(--acid); }
 #clip-split { padding: 3px 8px; font-size: 10.5px; align-self: end; }
+
+/* ---- スタイルバイブル ---- */
+.bible-swatches { display: flex; gap: 4px; margin: 8px 0 4px; min-height: 22px; }
+.bible-swatches span {
+  flex: 1; height: 22px; border: 1px solid var(--line);
+  font-size: 0; 
+}
+.bible-swatches:empty::after {
+  content: "参照画像なし"; font-family: var(--font-mono); font-size: 11px; color: var(--ink-dim);
+}
+.bible-field {
+  display: grid; grid-template-columns: 68px 1fr; align-items: center; gap: 6px;
+  font-family: var(--font-mono); font-size: 11px; color: var(--ink-dim); margin-top: 6px;
+}
+.bible-field input {
+  min-width: 0; padding: 4px 6px; background: #0a0d07;
+  border: 1px solid var(--line); color: var(--ink);
+  font-family: var(--font-mono); font-size: 11.5px;
+}
+.bible-field input:focus { outline: none; border-color: var(--acid); }

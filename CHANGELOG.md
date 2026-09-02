@@ -6,6 +6,12 @@
 ## [1.2.0] — 2026-09-02
 
 ### 追加
+- **スタイルバイブル**: 参照画像から代表色を6色拾って、プロジェクト共通のパレットにする。
+  新しい色処理「パレット寄せ」が全カットの色をそのパレットへ寄せるので、素材がバラバラでも
+  カット間の色が揃う（パレットはレシピではなくプロジェクトに属するので、必ず全カット共通）
+- **全カットに統一**: いまのラック設定・seed・パレットを全カットのレシピへ焼き付ける
+- AI画像生成にスタイルバイブルのパレットと禁止表現を渡すように（`/api/generate` に
+  `style` / `negativePrompt` を追加）
 - **カット字幕**: カットごとに1行の字幕を持てるように。プレビューにも重なり、MP4/GIFの
   書き出しに焼き込まれる（縁取り付き・日本語は1文字ずつ折り返して最大2行）
 - **AIで字幕を作る**: テーマを1行入れると、カット数と尺に合わせて全カット分の字幕を生成
@@ -18,6 +24,8 @@
 - **Motion Grammarの変形技法**: スタイル変換・形状変形・図形置換をレンダラーで実装
 
 ### 変更
+- MCPの `apply_style_bible` が書く `{preset, palette, seed}` 形式のレシピを、Web版が
+  読める形へ解決するように（これまでは既定値で描画していた）
 - 判定ロジック `reviewProject()` を `public/project-format.js` へ移し、ブラウザとMCPで共有
 - Project JSONの `captions` を編集画面の状態から生成し、読み込み時にカットへ戻すように
 - 同じ素材を複数カットが参照する場合、`assets` を重複排除するように
@@ -35,6 +43,11 @@
 - **Video review**: the Web UI can now run the same checks as the MCP `review_hook_and_pacing`
   (opening, length, pacing, captions, aspect ratio) and lists the findings with a score.
 - **Effect reordering**: drag to reorder the nine colour stages, halation through vignette.
+- **Style bible**: pick six representative colors from a reference image and keep them at the
+  project level. A new colour stage, palette lock, pulls every cut toward that palette, so cuts
+  from different sources share one colour identity. AI image generation gets the same palette
+  and avoid-list.
+- MCP `apply_style_bible` recipes (`{preset, palette, seed}`) now resolve into real settings in the web app.
 - **Motion Grammar transformation techniques**: style transformation, shape morph and graphic substitution.
 
 ## [1.1.1] — 2026-09-02

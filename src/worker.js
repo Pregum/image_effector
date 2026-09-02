@@ -271,12 +271,19 @@ async function handleGenerate(req, env, ai) {
     return json({ error: "invalid prompt" }, 400);
   }
 
+  // スタイルバイブル（パレット・禁止表現）を渡せる。無ければ従来どおり
+  const style = typeof body?.style === "string" ? body.style.trim().slice(0, 300) : "";
+  const negativePrompt = typeof body?.negativePrompt === "string" ? body.negativePrompt.trim().slice(0, 300) : "";
+
   if (!(await spendAiBudget(env, AI_COST.image + AI_COST.llm8b)).ok) return budgetExceeded();
 
-  const p = await translatePrompt(ai, prompt.trim());
+  const p = [await translatePrompt(ai, prompt.trim()), style].filter(Boolean).join(", ");
 
   try {
-    const out = await ai.image({ prompt: p, steps: 6 });
+    const out = await ai.image({
+      prompt: negativePrompt ? `${p} | negative: ${negativePrompt}` : p,
+      steps: 6,
+    });
     // アクセスキーが無くてもシェアできるように、生成した画像だけを共有用に置いておく。
     // 置けなくても生成自体は成功させる（共有できないだけ）
     let shareId = null;

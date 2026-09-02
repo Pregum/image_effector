@@ -369,7 +369,10 @@ uniform float u_split;  // ティール&オレンジ 0..1
 uniform float u_sat;    // 彩度 (1が等倍)
 uniform float u_con;    // コントラスト (1が等倍)
 uniform float u_leak;   // 光漏れ 0..1.5
-uniform int u_order[9]; // 色処理9段の適用順（0:ハレ 1:ディザ 2:グレード 3:光漏れ 4:スノー 5:文字 6:走査線 7:粒子 8:ビネット）
+uniform int u_order[10]; // 色処理10段の適用順（0:ハレ 1:ディザ 2:グレード 3:光漏れ 4:スノー 5:文字 6:走査線 7:粒子 8:ビネット 9:パレット寄せ）
+uniform vec3 u_pal[6];   // スタイルバイブルの参照パレット（sRGB 0-1）
+uniform int u_palN;      // 有効な色数。0ならパレット寄せは何もしない
+uniform float u_palMix;  // 寄せる強さ
 uniform sampler2D u_text; // 文字オーバーレイ
 uniform float u_textOn;
 
@@ -453,8 +456,8 @@ void main() {
   col.g = texture(u_base, puv).g;
   col.b = texture(u_base, puv - vec2(sh, 0.0)).b;
 
-  // --- サンプリング後の色処理9段。u_order の順に適用する ---
-  for (int oi = 0; oi < 9; oi++) {
+  // --- サンプリング後の色処理10段。u_order の順に適用する ---
+  for (int oi = 0; oi < 10; oi++) {
     int stage = u_order[oi];
 
   if (stage == 0) {
@@ -542,6 +545,20 @@ void main() {
   // ビネット
   vec2 dc = uv - 0.5;
   col *= 1.0 - u_vig * 1.6 * dot(dc, dc);
+
+  } else if (stage == 9) {
+  // パレット寄せ：参照パレットの最近色へ寄せて、カット間の色を揃える
+  if (u_palN > 0 && u_palMix > 0.0) {
+    vec3 near = u_pal[0];
+    float best = 1e9;
+    for (int i = 0; i < 6; i++) {
+      if (i >= u_palN) break;
+      vec3 d = col - u_pal[i];
+      float dist = dot(d, d);
+      if (dist < best) { best = dist; near = u_pal[i]; }
+    }
+    col = mix(col, near, u_palMix);
+  }
   }
 
   } // 色処理ループここまで
@@ -649,15 +666,16 @@ const state = {
   curve: 0.4, scan: 0.5, track: 0, wobble: 0,
   noise: 0.3, vig: 0.4,
   temp: 0.25, fade: 0.35, split: 0.5, sat: 1.1, con: 1.1, gorder: 0,
-  // 色処理9段の適用順。既定は従来と同じ並び
-  order: [0, 1, 2, 3, 4, 5, 6, 7, 8],
+  // 色処理10段の適用順。既定は従来と同じ並び
+  order: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+  palMix: 0.35,
   leak: 0.7,
 };
 const DEFAULTS = { ...state };
 const enabled = {
   blur: false, sort: false, glitch: false, rgb: false, halation: false,
   grade: false, leak: false,
-  pixel: false, dither: false, crt: false, grain: false,
+  pixel: false, dither: false, crt: false, grain: false, palette: false,
 };
 let seed = 1;
 let animate = true;
@@ -676,8 +694,37 @@ const COLOR_STAGES = [
   { id: 6, key: "scan", label: "走査線" },
   { id: 7, key: "grain", label: "グレイン" },
   { id: 8, key: "vig", label: "ビネット" },
+  { id: 9, key: "palette", label: "パレット寄せ" },
 ];
-const DEFAULT_ORDER = [0, 1, 2, 3, 4, 5, 6, 7, 8];
+const DEFAULT_ORDER = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+
+// ---------------------------------------------------------------- スタイルバイブル
+// カットごとに色を作り込むと全体がバラつくので、参照画像から拾った数色を
+// プロジェクト共通のパレットとして持ち、全カットの色をそこへ寄せる。
+// パレットはレシピではなくプロジェクトに属する（＝全カットで必ず同じ）。
+const PALETTE_MAX = 6;
+let stylePalette = []; // [[r,g,b], ...] 0-255
+let styleRefName = "";
+const paletteBuf = new Float32Array(PALETTE_MAX * 3);
+
+function paletteUniform() {
+  paletteBuf.fill(0);
+  stylePalette.forEach((c, i) => {
+    paletteBuf[i * 3] = c[0] / 255;
+    paletteBuf[i * 3 + 1] = c[1] / 255;
+    paletteBuf[i * 3 + 2] = c[2] / 255;
+  });
+  return paletteBuf;
+}
+
+const hex2 = (n) => Math.max(0, Math.min(255, Math.round(n))).toString(16).padStart(2, "0");
+const rgbToHex = (c) => `#${hex2(c[0])}${hex2(c[1])}${hex2(c[2])}`;
+function hexToRgb(hex) {
+  const m = /^#?([0-9a-f]{6})$/i.exec(String(hex || "").trim());
+  if (!m) return null;
+  const v = parseInt(m[1], 16);
+  return [(v >> 16) & 255, (v >> 8) & 255, v & 255];
+}
 
 function colorOrder(st) {
   const raw = Array.isArray(st?.order) ? st.order : null;
@@ -685,7 +732,7 @@ function colorOrder(st) {
   const seen = new Set();
   for (const v of raw || []) {
     const n = Number(v);
-    if (Number.isInteger(n) && n >= 0 && n <= 8 && !seen.has(n)) {
+    if (Number.isInteger(n) && n >= 0 && n <= 9 && !seen.has(n)) {
       seen.add(n);
       out.push(n);
     }
@@ -697,7 +744,7 @@ function colorOrder(st) {
     const di = out.indexOf(1);
     if (gi > di) { out.splice(gi, 1); out.splice(di, 0, 2); }
   }
-  return new Int32Array(out.slice(0, 9));
+  return new Int32Array(out.slice(0, 10));
 }
 
 const MODULES = [
@@ -749,6 +796,9 @@ const MODULES = [
       { key: "noise", label: "グレイン", min: 0, max: 1, step: 0.01 },
       { key: "vig", label: "ビネット", min: 0, max: 1, step: 0.01 },
     ] },
+  // 色はスタイルバイブルのパレットから来る。ここでは強さだけを持つ
+  { id: "palette", name: "PALETTE LOCK", jp: "パレット寄せ",
+    params: [{ key: "palMix", label: "寄せる強さ", min: 0, max: 1, step: 0.01 }] },
 ];
 
 const PRESETS = [
@@ -887,8 +937,10 @@ for (const pr of PRESETS) {
 }
 
 function applyPreset(pr) {
+  const keepPalette = enabled.palette && stylePalette.length;
   Object.assign(state, DEFAULTS, pr.set);
   for (const k of Object.keys(enabled)) enabled[k] = !!pr.on[k];
+  if (keepPalette) enabled.palette = true; // バイブルのパレットはプリセットより優先
   seed = Math.random() * 100;
   syncUI();
   scheduleSort();
@@ -1397,9 +1449,26 @@ let seqFrame = null;   // 再生中のフレーム情報 {texA, texB, t, zoomA, 
 let seqOverride = null; // 再生中カットのエフェクト設定（nullなら編集中の設定を使用）
 
 // カット追加時のレシピからrender用オーバーライドを構築する
+// MCPの apply_style_bible は {preset, palette, seed} 形式でレシピを書く。
+// Web版は {enabled, state, seed, text} を読むので、ここで橋渡しする
+function resolveRecipe(r) {
+  if (!r) return null;
+  if (r.enabled || r.state) return r;
+  const pr = PRESETS.find((p) => p.name === r.preset);
+  if (!pr) return r;
+  const en = {};
+  for (const k of Object.keys(enabled)) en[k] = !!pr.on[k];
+  return {
+    enabled: en,
+    state: { ...DEFAULTS, ...pr.set },
+    seed: typeof r.seed === "number" ? r.seed : 1,
+    text: r.text || null,
+  };
+}
+
 function buildSlideOverride(s) {
   if (!s.recipe) { s.override = null; return; }
-  const r = s.recipe;
+  const r = resolveRecipe(s.recipe);
   const en = {};
   for (const k of Object.keys(enabled)) en[k] = !!r.enabled?.[k];
   en.sort = false; // ピクセルソートはカット画像に焼き込み済み
@@ -2203,7 +2272,7 @@ function buildProjectManifest(sourceKind = "indexeddb") {
     ...activeProject,
     updatedAt,
     brief: { ...activeProject.brief, duration: seqTotalSec() },
-    styleBible: { ...activeProject.styleBible, seed },
+    styleBible: styleBibleObject(),
     canvas: { width: W || 1200, height: H || 800, ratio: projectRatioName(), fps: 30 },
     editor: { recipe: currentRecipe(), perCutEffects: seqState.percut },
     assets,
@@ -2217,6 +2286,123 @@ function buildProjectManifest(sourceKind = "indexeddb") {
       .filter((c) => c.text),
     render: { ...renderSize, fps: 30, codec: "h264", container: "mp4" },
   });
+}
+
+// ---- スタイルバイブルのUI
+const bibleEls = {
+  get swatches() { return document.getElementById("bible-swatches"); },
+  get name() { return document.getElementById("bible-ref-name"); },
+  get negative() { return document.getElementById("bible-negative"); },
+  get seed() { return document.getElementById("bible-seed"); },
+  get clear() { return document.getElementById("bible-clear"); },
+  get input() { return document.getElementById("bible-ref-input"); },
+};
+
+function renderBible() {
+  const sw = bibleEls.swatches;
+  if (sw) {
+    sw.innerHTML = "";
+    for (const c of stylePalette) {
+      const el = document.createElement("span");
+      el.style.background = rgbToHex(c);
+      el.title = rgbToHex(c);
+      sw.appendChild(el);
+    }
+  }
+  if (bibleEls.clear) bibleEls.clear.disabled = !stylePalette.length;
+  if (bibleEls.name) {
+    bibleEls.name.textContent = stylePalette.length
+      ? `${styleRefName || t("参照画像")}：${stylePalette.map(rgbToHex).join(" ")}`
+      : t("参照画像の色を6色に丸めて、全カットの色をそこへ寄せます。");
+  }
+  if (bibleEls.seed && document.activeElement !== bibleEls.seed) bibleEls.seed.value = seed;
+  markDirty();
+}
+
+// 参照画像から代表色を拾う。GIF用に書いた median cut をそのまま使う
+async function loadStyleReference(file) {
+  const bmp = await createImageBitmap(file);
+  const w = Math.max(1, Math.min(160, bmp.width));
+  const h = Math.max(1, Math.round((bmp.height / bmp.width) * w));
+  const c = document.createElement("canvas");
+  c.width = w; c.height = h;
+  c.getContext("2d", { willReadFrequently: true }).drawImage(bmp, 0, 0, w, h);
+  const data = c.getContext("2d").getImageData(0, 0, w, h);
+  bmp.close?.();
+  // median cut は色数の少ない画像でほぼ同じ色を何度も返す。近すぎる色は捨てる
+  const raw = medianCutPalette([data], PALETTE_MAX);
+  const kept = [];
+  for (const c of raw) {
+    if (kept.some((k) => Math.abs(k[0] - c[0]) + Math.abs(k[1] - c[1]) + Math.abs(k[2] - c[2]) < 30)) continue;
+    kept.push(c);
+  }
+  stylePalette = (kept.length ? kept : raw.slice(0, 1)).slice(0, PALETTE_MAX);
+  styleRefName = file.name || "";
+  enabled.palette = true; // 拾った直後に効いていないと、何が起きたか分からない
+  syncUI();
+  renderBible();
+}
+
+document.getElementById("bible-ref")?.addEventListener("click", () => bibleEls.input?.click());
+bibleEls.input?.addEventListener("change", async () => {
+  const f = bibleEls.input.files[0];
+  bibleEls.input.value = "";
+  if (!f) return;
+  try { await loadStyleReference(f); }
+  catch { setNote("参照画像を読み込めませんでした。", true); }
+});
+document.getElementById("bible-clear")?.addEventListener("click", () => {
+  stylePalette = [];
+  styleRefName = "";
+  renderBible();
+});
+bibleEls.seed?.addEventListener("change", () => {
+  const v = Number(bibleEls.seed.value);
+  if (!Number.isFinite(v)) return;
+  seed = Math.max(0, Math.round(v));
+  syncUI();
+  markDirty();
+});
+
+// 全カットに統一：いまのラック設定・seed・パレットを全カットのレシピへ焼き付ける
+document.getElementById("bible-apply")?.addEventListener("click", () => {
+  if (!slides.length) { transNote.textContent = t("先に画像か動画を追加してください。"); return; }
+  const rec = currentRecipe();
+  for (const s of slides) {
+    s.recipe = { ...rec, enabled: { ...rec.enabled }, state: { ...rec.state }, text: { ...s.recipe?.text || rec.text } };
+    buildSlideOverride(s);
+  }
+  markDirty();
+  transNote.textContent = `${slides.length}${t("カット")}${t("に同じ設定を適用しました。")}`;
+});
+
+renderBible();
+
+function styleBibleObject() {
+  return {
+    ...activeProject.styleBible,
+    palette: stylePalette.map(rgbToHex),
+    references: styleRefName ? [styleRefName] : [],
+    negativePrompt: (bibleEls.negative?.value || "").trim(),
+    seed,
+  };
+}
+
+function applyStyleBibleObject(bible) {
+  if (!bible) return;
+  stylePalette = (bible.palette || []).map(hexToRgb).filter(Boolean).slice(0, PALETTE_MAX);
+  styleRefName = (bible.references || [])[0] || "";
+  if (bibleEls.negative) bibleEls.negative.value = bible.negativePrompt || "";
+  renderBible();
+}
+
+// AI画像生成にスタイルバイブルを添える（プロンプトの色指定＋禁止表現）
+function styleBibleForPrompt() {
+  const palette = stylePalette.map(rgbToHex);
+  return {
+    style: palette.length ? `color palette ${palette.join(" ")}` : "",
+    negativePrompt: (bibleEls.negative?.value || "").trim(),
+  };
 }
 
 function projectBlobs() {
@@ -2344,9 +2530,10 @@ async function restoreProject(manifest, storedBlobs = {}) {
   baseData = null;
   bgmBuffer = null; bgmBlob = null; bgmFileName = ""; bgmAssetId = null;
   activeProject = manifest;
-  if (manifest.editor?.recipe) applyRecipeObject({
-    e: manifest.editor.recipe.enabled, s: manifest.editor.recipe.state,
-    seed: manifest.editor.recipe.seed, t: manifest.editor.recipe.text,
+  const editorRecipe = resolveRecipe(manifest.editor?.recipe);
+  if (editorRecipe) applyRecipeObject({
+    e: editorRecipe.enabled, s: editorRecipe.state,
+    seed: editorRecipe.seed, t: editorRecipe.text,
   });
   const firstTransition = visual.clips.find((clip) => clip.transitionOut)?.transitionOut;
   // UIのボタンは0-7のみ。JSON専用の接続技法(8-)が来た場合、一括選択は既定へ倒す
@@ -2394,6 +2581,7 @@ async function restoreProject(manifest, storedBlobs = {}) {
     b.classList.toggle("sel", Number(b.dataset.mode) === seqState.mode));
   const ratioValue = { original: "0", "16:9": "1.77778", "1:1": "1", "9:16": "0.5625" }[manifest.canvas.ratio] || "0";
   ratioSeg.querySelector(`button[data-r="${ratioValue}"]`)?.click();
+  applyStyleBibleObject(manifest.styleBible);
   for (const cap of manifest.captions || []) {
     const target = slides[cap.cutIndex];
     if (target && !target.caption) target.caption = String(cap.text || "");
@@ -3101,7 +3289,7 @@ async function generate() {
     const res = await fetch("/api/generate", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ prompt }),
+      body: JSON.stringify({ prompt, ...styleBibleForPrompt() }),
     });
     if (res.status === 429) {
       setNote("リクエストが多すぎます。1分ほど待ってから再試行してください。", true);
@@ -3608,6 +3796,10 @@ function render(time) {
   gl.uniform1f(u.u_con, en.grade ? st.con : 1);
   gl.uniform1f(u.u_leak, en.leak ? st.leak : 0);
   gl.uniform1iv(u.u_order, colorOrder(st));
+  // パレットはプロジェクト共通。カットごとのレシピには入れず、全カットへ同じ色を渡す
+  gl.uniform3fv(u.u_pal, paletteUniform());
+  gl.uniform1i(u.u_palN, stylePalette.length);
+  gl.uniform1f(u.u_palMix, en.palette ? st.palMix : 0);
   const textOn = ov ? ov.textOn : textState.str.trim() !== "";
   const textTexUse = ov ? (ov.textTex || clearTex) : (textOn ? textTex : clearTex);
   gl.activeTexture(gl.TEXTURE2);

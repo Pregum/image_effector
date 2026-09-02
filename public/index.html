@@ -248,6 +248,23 @@
       <p class="text-hint">ドラッグで色処理の順番を入れ替えられます。上から順に適用されます。</p>
     </div>
 
+    <div class="panel-section collapsible collapsed" data-sec="bible">
+      <h2 class="section-title">STYLE BIBLE <span class="jp">／ カット間の一貫性</span></h2>
+      <div class="ai-row">
+        <button id="bible-ref" class="btn">参照画像から色を拾う</button>
+        <button id="bible-clear" class="btn" disabled>クリア</button>
+      </div>
+      <input id="bible-ref-input" type="file" accept="image/*" hidden />
+      <div class="bible-swatches" id="bible-swatches" aria-label="参照パレット"></div>
+      <p class="text-hint" id="bible-ref-name">参照画像の色を6色に丸めて、全カットの色をそこへ寄せます。</p>
+      <label class="bible-field">禁止表現 <input id="bible-negative" type="text" maxlength="200" placeholder="例: 文字、透かし、崩れた手" /></label>
+      <label class="bible-field">seed <input id="bible-seed" type="number" min="0" step="1" /></label>
+      <div class="ai-row">
+        <button id="bible-apply" class="btn btn-primary">全カットに統一</button>
+      </div>
+      <p class="text-hint">「全カットに統一」で、いまのラック設定・seed・パレットを全カットのレシピへ焼き付けます。AI画像生成にも同じパレットと禁止表現を渡します。</p>
+    </div>
+
     <footer class="panel-footer">
       加工はすべてブラウザ内 (WebGL2) で完結し、画像は「ギャラリーへ保存」した時以外サーバーに送信されません。
     </footer>

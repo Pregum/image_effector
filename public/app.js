@@ -1,7 +1,7 @@
 import { t, LANG, setLang, localizeDom } from "./i18n.js";
 import { track, setAnalyticsEnabled } from "./analytics.js";
 import {
-  createAssetId, createClipId, createProject, parseProjectJson, stringifyProject, validateProject,
+  createAssetId, createClipId, createProject, parseProjectJson, reviewProject, stringifyProject, validateProject,
 } from "./project-format.js";
 
 /* NOIZ LAB — 画像エフェクト実験室
@@ -4772,6 +4772,50 @@ if (sharedHashMatch) {
     }
   })();
 }
+
+// ---------------------------------------------------------------- 動画のレビュー
+// MCPの review_hook_and_pacing と同じ基準（project-format.js の reviewProject）で、
+// いま組んでいるタイムラインの冒頭・尺・緩急・字幕・比率を検査する。
+const REVIEW_LABEL = { error: "要修正", warn: "注意", info: "提案" };
+
+function runReview() {
+  const panel = document.getElementById("review-panel");
+  if (!panel) return;
+  panel.hidden = false;
+  if (!slides.length) {
+    panel.innerHTML = `<p class="review-head">${t("先に画像か動画を追加してください。")}</p>`;
+    return;
+  }
+  let result;
+  try {
+    result = reviewProject(buildProjectManifest());
+  } catch {
+    panel.innerHTML = `<p class="review-head">${t("レビューを実行できませんでした。")}</p>`;
+    return;
+  }
+  const { findings, score, totalDuration, cutCount } = result;
+  panel.innerHTML = "";
+  const head = document.createElement("p");
+  head.className = "review-head";
+  head.textContent = `${t("スコア")} ${score}/100 ・ ${cutCount}${t("カット")} ・ ${totalDuration}${t("秒")}`;
+  panel.appendChild(head);
+  if (!findings.length) {
+    const ok = document.createElement("p");
+    ok.className = "review-ok";
+    ok.textContent = t("指摘はありません。");
+    panel.appendChild(ok);
+    return;
+  }
+  for (const f of findings) {
+    const item = document.createElement("div");
+    item.className = `review-item sev-${f.severity}`;
+    item.innerHTML = `<span class="review-sev"></span><span class="review-msg"></span>`;
+    item.querySelector(".review-sev").textContent = t(REVIEW_LABEL[f.severity] || f.severity);
+    item.querySelector(".review-msg").textContent = `${f.message} ${f.suggestion}`;
+    panel.appendChild(item);
+  }
+}
+document.getElementById("btn-review")?.addEventListener("click", runReview);
 
 // ---------------------------------------------------------------- 適用順のUI（ドラッグで並び替え）
 // 色処理9段の順番を入れ替える。state.order は破壊的に変更せず、常に新しい配列へ差し替える

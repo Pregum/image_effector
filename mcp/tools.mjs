@@ -8,6 +8,8 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import {
   createAssetId, createClipId, createProject, validateProject,
+  PLATFORM_SHAPE,
+  reviewProject,
 } from "../public/project-format.js";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -29,13 +31,7 @@ const PURPOSES = ["hook", "explain", "demonstrate", "reveal", "emotion", "cta", 
 // Vertical platforms crop to 9:16; a deck stays 16:9. Keeps render/canvas honest
 // so review_hook_and_pacing can flag a mismatch instead of silently letting a
 // 16:9 cut get centre-cropped on TikTok.
-const PLATFORM_SHAPE = {
-  generic: { ratio: "16:9", width: 1280, height: 720, maxDuration: 0 },
-  tiktok: { ratio: "9:16", width: 720, height: 1280, maxDuration: 180 },
-  "instagram-reels": { ratio: "9:16", width: 720, height: 1280, maxDuration: 90 },
-  "youtube-shorts": { ratio: "9:16", width: 720, height: 1280, maxDuration: 60 },
-  presentation: { ratio: "16:9", width: 1280, height: 720, maxDuration: 0 },
-};
+// PLATFORM_SHAPE と reviewProject は Web版と基準を揃えるため共有モジュールに置いている
 
 // Mood keyword -> preset. The keys are matched as substrings against the mood
 // list and the objective, in both languages, so a brief written in prose still
@@ -717,73 +713,7 @@ export async function generateStoryboard(args = {}) {
 
 /** review_hook_and_pacing */
 export function reviewHookAndPacing(args = {}) {
-  const project = requireProject(args.project);
-  const clips = visualTrack(project).clips;
-  const findings = [];
-  const add = (severity, code, message, suggestion) => findings.push({ severity, code, message, suggestion });
-
-  if (!clips.length) {
-    add("error", "no-cuts", "タイムラインにカットがありません。", "build_short_videoで素材を配置してください。");
-    return { findings, score: 0, totalDuration: 0 };
-  }
-
-  const total = round(clips.reduce((sum, c) => sum + c.duration, 0));
-  const shape = PLATFORM_SHAPE[project.brief.platform];
-
-  const hook = clips[0];
-  if (hook.purpose !== "hook") {
-    add("warn", "hook-purpose", `冒頭カットのpurposeが${hook.purpose}です。`, "1カット目はhookにして、何の動画か2秒で伝えてください。");
-  }
-  if (hook.duration > 2.5) {
-    add("warn", "hook-too-long", `冒頭カットが${hook.duration}秒あります。`, "短尺では冒頭を2秒以下にして離脱を防いでください。");
-  }
-
-  if (shape.maxDuration && total > shape.maxDuration) {
-    add("error", "over-platform-limit", `${total}秒は${project.brief.platform}の上限${shape.maxDuration}秒を超えています。`, "カット数か1カットの尺を減らしてください。");
-  }
-  if (project.brief.duration > 0 && Math.abs(total - project.brief.duration) > project.brief.duration * 0.2) {
-    add("warn", "duration-drift", `想定${project.brief.duration}秒に対し実尺が${total}秒です。`, "build_short_videoにdurationを渡して尺を合わせてください。");
-  }
-
-  // Uniform cut lengths read as a slideshow. Flag it only when there are enough
-  // cuts for the rhythm to matter.
-  const durations = clips.map((c) => c.duration);
-  if (clips.length >= 4 && new Set(durations).size === 1) {
-    add("info", "uniform-pacing", "全カットが同じ尺で、単調に見えます。", "フックを短く、締めを長くするなど緩急をつけてください。");
-  }
-  const longest = Math.max(...durations);
-  if (longest > 4) {
-    add("warn", "slow-cut", `最長カットが${longest}秒あります。`, "短尺では1カット4秒以内を目安にしてください。");
-  }
-
-  const techniques = clips.slice(0, -1).map((c) => c.transitionOut?.technique).filter(Boolean);
-  for (let i = 1; i < techniques.length; i++) {
-    if (techniques[i] === techniques[i - 1] && techniques.length > 2) {
-      add("info", "repeated-transition", `トランジション${techniques[i]}が連続しています。`, "transitionsに複数指定して交互に使ってください。");
-      break;
-    }
-  }
-
-  if (!clips.some((c) => c.purpose === "cta") && project.brief.platform !== "presentation") {
-    add("info", "no-cta", "締めのCTAカットがありません。", "最後のカットをctaにして次の行動を促してください。");
-  }
-  if (!project.captions.length) {
-    add("warn", "no-captions", "字幕がありません。", "無音再生でも伝わるよう字幕を入れてください。");
-  }
-  if (project.canvas.ratio !== shape.ratio) {
-    add("warn", "ratio-mismatch", `${project.brief.platform}は${shape.ratio}が基本ですが、canvasは${project.canvas.ratio}です。`, `canvas.ratioを${shape.ratio}にしてください。`);
-  }
-  if (!project.styleBible.palette.length) {
-    add("info", "no-palette", "スタイルバイブルに色が設定されていません。", "apply_style_bibleで配色を固定すると統一感が出ます。");
-  }
-
-  const penalty = findings.reduce((sum, f) => sum + ({ error: 30, warn: 12, info: 4 })[f.severity], 0);
-  return {
-    findings,
-    score: clamp(100 - penalty, 0, 100),
-    totalDuration: total,
-    cutCount: clips.length,
-  };
+  return reviewProject(requireProject(args.project));
 }
 
 /** validate_project */

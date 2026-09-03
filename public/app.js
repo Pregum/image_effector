@@ -985,36 +985,83 @@ let originalData = null; // ImageData（処理解像度、重ね画像の合成�
 let baseData = null;     // 重ね画像を載せる前のベース画像
 let sourceGen = 0;       // 元画像が差し替わるたびに増える。共有リンクの使い回し判定に使う
 
-// ---- 重ね画像（ソース段階で合成し、エフェクトは合成後の全体にかかる）
+// ---- レイヤー（ベース画像の上に画像・動画を重ねる）
+// ソース段階で合成するので、エフェクトは合成後の全体にかかる。
+// ベース画像は layers に入れず常に一番下に敷く。配列は後ろの要素ほど手前。
 const OVERLAY_BLENDS = ["source-over", "screen", "multiply", "lighter"];
-const overlayState = { img: null, x: 0.7, y: 0.35, scale: 0.4, opacity: 1, blend: 0 };
+// c* は「元素材のどの範囲を使うか」を 0..1 で表した切り抜き矩形
+const LAYER_DEFAULTS = { x: 0.5, y: 0.5, scale: 0.5, opacity: 1, blend: 0, visible: true, cx: 0, cy: 0, cw: 1, ch: 1 };
+const layers = [];
+let activeLayer = -1;
+let layerSeq = 0;
 
-function compositeSource() {
+const layerSource = (l) => (l.kind === "video" ? l.video : l.img);
+
+// 素材の実寸。動画はメタデータが来るまで0なので、その間は描かない
+function layerNatural(l) {
+  const src = layerSource(l);
+  if (!src) return null;
+  const w = l.kind === "video" ? src.videoWidth : src.width;
+  const h = l.kind === "video" ? src.videoHeight : src.height;
+  return w > 0 && h > 0 ? { w, h } : null;
+}
+
+// 切り抜き後の素材上の矩形と、キャンバス上の描画矩形。
+// 拡大率は「切り抜いた後の幅」に対してかかる（切り抜いても見た目の大きさが変わらない）
+function layerRects(l) {
+  const nat = layerNatural(l);
+  if (!nat) return null;
+  const sw = Math.max(1, nat.w * l.cw);
+  const sh = Math.max(1, nat.h * l.ch);
+  const dw = W * l.scale;
+  const dh = dw * (sh / sw);
+  return { sx: nat.w * l.cx, sy: nat.h * l.cy, sw, sh, dx: W * l.x - dw / 2, dy: H * l.y - dh / 2, dw, dh };
+}
+
+// 動画レイヤーがあるフレームは中身が毎フレーム変わるので、描画ループで合成し直す
+const hasLiveLayer = () => layers.some((l) => l.visible && l.kind === "video" && l.video.readyState >= 2);
+
+let compCanvas = null;
+let compCtx = null;
+
+// ベース画像＋レイヤーを合成して originalData を更新し、テクスチャへ送る
+function drawComposite() {
   if (!baseData) return;
-  sourceGen++;
-  if (!overlayState.img) {
+  const drawable = layers.filter((l) => l.visible && layerRects(l));
+  if (!drawable.length) {
     originalData = baseData;
     uploadSource();
     return;
   }
-  const c = document.createElement("canvas");
-  c.width = W;
-  c.height = H;
-  const ctx = c.getContext("2d");
-  ctx.putImageData(baseData, 0, 0);
-  const ow = W * overlayState.scale;
-  const oh = ow * (overlayState.img.height / overlayState.img.width);
-  ctx.globalAlpha = overlayState.opacity;
-  ctx.globalCompositeOperation = OVERLAY_BLENDS[overlayState.blend] || "source-over";
-  ctx.drawImage(
-    overlayState.img,
-    W * overlayState.x - ow / 2,
-    H * overlayState.y - oh / 2,
-    ow,
-    oh
-  );
-  originalData = ctx.getImageData(0, 0, W, H);
+  if (!compCanvas || compCanvas.width !== W || compCanvas.height !== H) {
+    compCanvas = document.createElement("canvas");
+    compCanvas.width = W;
+    compCanvas.height = H;
+    compCtx = compCanvas.getContext("2d", { willReadFrequently: true });
+  }
+  compCtx.globalAlpha = 1;
+  compCtx.globalCompositeOperation = "source-over";
+  compCtx.putImageData(baseData, 0, 0);
+  for (const l of drawable) {
+    const r = layerRects(l);
+    compCtx.globalAlpha = l.opacity;
+    compCtx.globalCompositeOperation = OVERLAY_BLENDS[l.blend] || "source-over";
+    try {
+      compCtx.drawImage(layerSource(l), r.sx, r.sy, r.sw, r.sh, r.dx, r.dy, r.dw, r.dh);
+    } catch { /* 動画がまだ描けないフレームは飛ばす */ }
+  }
+  compCtx.globalAlpha = 1;
+  compCtx.globalCompositeOperation = "source-over";
+  originalData = compCtx.getImageData(0, 0, W, H);
   uploadSource();
+}
+
+// 合成のもとが変わったとき用。sourceGen は共有リンクの使い回し判定に使うので、
+// 動画レイヤーの毎フレーム更新（drawComposite 直呼び）では増やさない
+function compositeSource() {
+  if (!baseData) return;
+  sourceGen++;
+  drawComposite();
 }
 
 let compositePending = false;
@@ -1027,54 +1074,228 @@ function scheduleComposite() {
   });
 }
 
-const overlayInput = document.getElementById("overlay-input");
-document.getElementById("overlay-open").addEventListener("click", () => overlayInput.click());
-overlayInput.addEventListener("change", async () => {
-  const f = overlayInput.files[0];
-  overlayInput.value = "";
-  if (!f) return;
-  try {
-    overlayState.img = await createImageBitmap(f);
-    syncOverlayUI();
-    compositeSource();
-  } catch { /* 読み込めない画像は無視 */ }
-});
-document.getElementById("overlay-clear").addEventListener("click", () => {
-  overlayState.img = null;
-  syncOverlayUI();
+// 動画レイヤーを切り出し区間の中でループさせる。
+// video.loop は素材全体を回してしまうので使わず、ここで巻き戻す
+function syncLayerVideos() {
+  for (const l of layers) {
+    if (l.kind !== "video") continue;
+    if (!l.visible) {
+      if (!l.video.paused) l.video.pause();
+      continue;
+    }
+    const dur = Number.isFinite(l.video.duration) ? l.video.duration : 0;
+    const end = l.trimEnd > l.trimStart ? Math.min(l.trimEnd, dur || l.trimEnd) : dur;
+    const t = l.video.currentTime;
+    if (end > 0 && (t >= end - 0.03 || t < l.trimStart - 0.05)) l.video.currentTime = l.trimStart;
+    if (l.video.paused) l.video.play().catch(() => { /* 自動再生できない環境は静止画のまま */ });
+  }
+}
+
+const layerName = (file, kind) =>
+  (file?.name || (kind === "video" ? "動画" : "画像")).slice(0, 28);
+
+function pushLayer(l) {
+  layers.push(l);
+  activeLayer = layers.length - 1;
+  syncLayerUI();
   compositeSource();
+}
+
+async function addImageLayer(file) {
+  const img = await createImageBitmap(file);
+  pushLayer({ id: ++layerSeq, kind: "image", name: layerName(file, "image"), img, ...LAYER_DEFAULTS });
+}
+
+async function addVideoLayer(file) {
+  const objectUrl = URL.createObjectURL(file);
+  const video = document.createElement("video");
+  video.src = objectUrl;
+  video.muted = true;
+  video.playsInline = true;
+  video.loop = false;
+  try {
+    await videoReady(video);
+  } catch {
+    URL.revokeObjectURL(objectUrl);
+    return;
+  }
+  const dur = Number.isFinite(video.duration) ? video.duration : 0;
+  video.play().catch(() => { /* 再生できなくても最初のフレームは出る */ });
+  pushLayer({
+    id: ++layerSeq, kind: "video", name: layerName(file, "video"), video, objectUrl,
+    trimStart: 0, trimEnd: dur, ...LAYER_DEFAULTS,
+  });
+}
+
+function removeLayer(i) {
+  const l = layers[i];
+  if (!l) return;
+  if (l.kind === "video") {
+    l.video.pause();
+    l.video.removeAttribute("src");
+    l.video.load();
+    URL.revokeObjectURL(l.objectUrl);
+  } else {
+    l.img.close?.();
+  }
+  layers.splice(i, 1);
+  activeLayer = Math.min(activeLayer, layers.length - 1);
+  syncLayerUI();
+  compositeSource();
+}
+
+function moveLayer(i, delta) {
+  const j = i + delta;
+  if (j < 0 || j >= layers.length) return;
+  [layers[i], layers[j]] = [layers[j], layers[i]];
+  activeLayer = j;
+  syncLayerUI();
+  compositeSource();
+}
+
+function clearLayers() {
+  while (layers.length) removeLayer(layers.length - 1);
+}
+
+// ---- レイヤーのUI
+
+// レイヤー名は読み込んだファイル名がそのまま入るので、HTMLに埋める前に潰す
+const esc = (v) =>
+  String(v).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+const layerListEl = document.getElementById("layer-list");
+const layerCtlEl = document.getElementById("layer-ctl");
+const layerImageInput = document.getElementById("overlay-input");
+const layerVideoInput = document.getElementById("layer-video-input");
+
+document.getElementById("layer-add-image").addEventListener("click", () => layerImageInput.click());
+document.getElementById("layer-add-video").addEventListener("click", () => layerVideoInput.click());
+
+layerImageInput.addEventListener("change", async () => {
+  const f = layerImageInput.files[0];
+  layerImageInput.value = "";
+  if (f) await addImageLayer(f).catch(() => { /* 読み込めない画像は無視 */ });
 });
-for (const key of ["scale", "opacity"]) {
-  const input = document.getElementById(`overlay-${key}`);
-  input.addEventListener("input", () => {
-    overlayState[key] = +input.value;
-    document.getElementById(`overlay-${key}-val`).textContent = (+input.value).toFixed(2);
+layerVideoInput.addEventListener("change", async () => {
+  const f = layerVideoInput.files[0];
+  layerVideoInput.value = "";
+  if (f) await addVideoLayer(f);
+});
+
+// 一覧は上が手前になるよう、配列を逆順で並べる
+function renderLayerList() {
+  layerListEl.replaceChildren();
+  for (let i = layers.length - 1; i >= 0; i--) {
+    const l = layers[i];
+    const li = document.createElement("li");
+    li.className = "layer-row" + (i === activeLayer ? " sel" : "");
+    li.innerHTML =
+      `<button class="layer-eye" title="${l.visible ? "隠す" : "表示する"}">${l.visible ? "◉" : "◌"}</button>` +
+      `<button class="layer-name">${l.kind === "video" ? "▶" : "▣"} ${esc(l.name)}</button>` +
+      `<button class="layer-up" title="前面へ" ${i === layers.length - 1 ? "disabled" : ""}>↑</button>` +
+      `<button class="layer-down" title="背面へ" ${i === 0 ? "disabled" : ""}>↓</button>` +
+      `<button class="layer-del" title="削除">×</button>`;
+    li.querySelector(".layer-eye").addEventListener("click", () => {
+      l.visible = !l.visible;
+      syncLayerUI();
+      compositeSource();
+    });
+    li.querySelector(".layer-name").addEventListener("click", () => { activeLayer = i; syncLayerUI(); });
+    li.querySelector(".layer-up").addEventListener("click", () => moveLayer(i, 1));
+    li.querySelector(".layer-down").addEventListener("click", () => moveLayer(i, -1));
+    li.querySelector(".layer-del").addEventListener("click", () => removeLayer(i));
+    layerListEl.appendChild(li);
+  }
+  layerListEl.hidden = layers.length === 0;
+}
+
+const LAYER_SLIDERS = ["scale", "opacity", "cx", "cy", "cw", "ch"];
+
+function syncLayerUI() {
+  renderLayerList();
+  const l = layers[activeLayer];
+  layerCtlEl.hidden = !l;
+  if (!l) return;
+  for (const key of LAYER_SLIDERS) syncLayerSlider(key);
+  document.getElementById("layer-blend-seg").querySelectorAll("button")
+    .forEach((b, i) => b.classList.toggle("sel", i === l.blend));
+  const isVideo = l.kind === "video";
+  document.getElementById("layer-video-ctl").hidden = !isVideo;
+  if (isVideo) {
+    const dur = Number.isFinite(l.video.duration) ? l.video.duration : 0;
+    document.getElementById("layer-trim-start").value = l.trimStart.toFixed(1);
+    document.getElementById("layer-trim-end").value = l.trimEnd.toFixed(1);
+    document.getElementById("layer-trim-start").max = Math.max(0, dur - 0.1).toFixed(1);
+    document.getElementById("layer-trim-end").max = dur.toFixed(1);
+    document.getElementById("layer-duration").textContent = `${dur.toFixed(1)}s`;
+  }
+}
+
+// スライダーと数値表示をレイヤーの現在値に合わせる。
+// 切り抜きは片方を動かすともう片方が詰まるので、詰めた側もここで追従させる
+function syncLayerSlider(key) {
+  const l = layers[activeLayer];
+  if (!l) return;
+  document.getElementById(`layer-${key}`).value = l[key];
+  document.getElementById(`layer-${key}-val`).textContent = (+l[key]).toFixed(2);
+}
+
+// 切り抜きの相方（左↔幅、上↔高さ）
+const CROP_PAIR = { cx: "cw", cw: "cx", cy: "ch", ch: "cy" };
+
+for (const key of LAYER_SLIDERS) {
+  document.getElementById(`layer-${key}`).addEventListener("input", (e) => {
+    const l = layers[activeLayer];
+    if (!l) return;
+    l[key] = +e.target.value;
+    // 切り抜きは 左+幅 が素材からはみ出さないように詰める
+    const pair = CROP_PAIR[key];
+    if (pair) {
+      l[pair] = Math.min(l[pair], 1 - l[key]);
+      syncLayerSlider(pair);
+    }
+    syncLayerSlider(key);
     scheduleComposite();
   });
 }
-document.getElementById("overlay-blend-seg").querySelectorAll("button").forEach((b, i) => {
+
+document.getElementById("layer-blend-seg").querySelectorAll("button").forEach((b, i) => {
   b.addEventListener("click", () => {
-    overlayState.blend = i;
-    document.getElementById("overlay-blend-seg").querySelectorAll("button")
-      .forEach((v) => v.classList.remove("sel"));
-    b.classList.add("sel");
+    const l = layers[activeLayer];
+    if (!l) return;
+    l.blend = i;
+    syncLayerUI();
     scheduleComposite();
   });
 });
 
-function syncOverlayUI() {
-  document.getElementById("overlay-clear").disabled = !overlayState.img;
+for (const [id, key] of [["layer-trim-start", "trimStart"], ["layer-trim-end", "trimEnd"]]) {
+  document.getElementById(id).addEventListener("change", (e) => {
+    const l = layers[activeLayer];
+    if (!l || l.kind !== "video") return;
+    const dur = Number.isFinite(l.video.duration) ? l.video.duration : 0;
+    const v = Math.min(Math.max(0, +e.target.value || 0), dur);
+    l[key] = v;
+    if (l.trimEnd <= l.trimStart) l.trimEnd = Math.min(dur, l.trimStart + 0.1);
+    l.video.currentTime = l.trimStart;
+    syncLayerUI();
+  });
 }
 
-// 指定クライアント座標が重ね画像の矩形内か（ドラッグ対象の判定用）
-function overlayHit(e) {
-  if (!overlayState.img) return false;
+// 指定クライアント座標がレイヤーの矩形内か（ドラッグ対象の判定用）。
+// 手前のレイヤーから調べ、最初に当たったものを掴む
+function layerHit(e) {
   const r = canvas.getBoundingClientRect();
   const px = (e.clientX - r.left) / r.width;
   const py = (e.clientY - r.top) / r.height;
-  const wN = overlayState.scale;
-  const hN = wN * (overlayState.img.height / overlayState.img.width) * (W / H);
-  return Math.abs(px - overlayState.x) <= wN / 2 && Math.abs(py - overlayState.y) <= hN / 2;
+  for (let i = layers.length - 1; i >= 0; i--) {
+    const l = layers[i];
+    if (!l.visible) continue;
+    const rect = layerRects(l);
+    if (!rect) continue;
+    if (Math.abs(px - l.x) <= rect.dw / W / 2 && Math.abs(py - l.y) <= rect.dh / H / 2) return i;
+  }
+  return -1;
 }
 
 function lumOf(d, i) {
@@ -1156,8 +1377,7 @@ function setSourceImage(imgLike, w, h) {
   ctx.drawImage(imgLike, 0, 0, W, H);
   baseData = ctx.getImageData(0, 0, W, H);
   // 新しいベース画像を読み込んだら重ね画像はリセット（二重焼き込み防止）
-  overlayState.img = null;
-  syncOverlayUI();
+  clearLayers();
   canvas.width = W;
   canvas.height = H;
   allocFbos(W, H);
@@ -1297,7 +1517,8 @@ for (const axis of ["x", "y"]) {
 let dragTarget = null; // "overlay" | "text" | null
 let textTexPending = false;
 canvas.addEventListener("pointerdown", (e) => {
-  if (overlayHit(e)) dragTarget = "overlay";
+  const hit = layerHit(e);
+  if (hit >= 0) { dragTarget = "overlay"; activeLayer = hit; syncLayerUI(); }
   else if (textState.str.trim()) dragTarget = "text";
   else return;
   canvas.setPointerCapture(e.pointerId);
@@ -1309,8 +1530,10 @@ canvas.addEventListener("pointermove", (e) => {
   const px = (e.clientX - r.left) / r.width;
   const py = (e.clientY - r.top) / r.height;
   if (dragTarget === "overlay") {
-    overlayState.x = Math.min(1.1, Math.max(-0.1, px));
-    overlayState.y = Math.min(1.1, Math.max(-0.1, py));
+    const l = layers[activeLayer];
+    if (!l) return;
+    l.x = Math.min(1.1, Math.max(-0.1, px));
+    l.y = Math.min(1.1, Math.max(-0.1, py));
     scheduleComposite();
     return;
   }
@@ -3996,6 +4219,14 @@ function frame() {
     }
   }
   if (!seqPlaying && !previewMode && seqCaptionText) setSeqCaption("");
+  // 動画レイヤーは中身が毎フレーム変わるので、合成をやり直してから描く
+  if (layers.length) {
+    syncLayerVideos();
+    if (hasLiveLayer()) {
+      drawComposite();
+      dirty = true;
+    }
+  }
   const needsAnim = animate && originalData &&
     ((enabled.glitch && state.glitch > 0) ||
      (enabled.grain && state.noise > 0) ||

@@ -139,23 +139,50 @@
     </div>
 
     <div class="panel-section collapsible collapsed" data-sec="overlay">
-      <h2 class="section-title">OVERLAY <span class="jp">／ 重ね画像</span></h2>
+      <h2 class="section-title">LAYERS <span class="jp">／ 重ねる画像・動画</span></h2>
       <div class="ai-row">
-        <button id="overlay-open" class="btn">画像を選ぶ</button>
-        <button id="overlay-clear" class="btn" disabled>クリア</button>
+        <button id="layer-add-image" class="btn">画像を追加</button>
+        <button id="layer-add-video" class="btn">動画を追加</button>
       </div>
-      <div class="ctl">
-        <div class="ctl-label"><span>サイズ</span><span class="val" id="overlay-scale-val">0.40</span></div>
-        <input type="range" id="overlay-scale" min="0.08" max="1" step="0.01" value="0.4" />
+      <ul class="layer-list" id="layer-list" hidden></ul>
+      <div id="layer-ctl" hidden>
+        <div class="ctl">
+          <div class="ctl-label"><span>サイズ</span><span class="val" id="layer-scale-val">0.50</span></div>
+          <input type="range" id="layer-scale" min="0.05" max="2" step="0.01" value="0.5" />
+        </div>
+        <div class="ctl">
+          <div class="ctl-label"><span>不透明度</span><span class="val" id="layer-opacity-val">1.00</span></div>
+          <input type="range" id="layer-opacity" min="0.05" max="1" step="0.01" value="1" />
+        </div>
+        <div class="seg" id="layer-blend-seg">
+          <button class="sel">通常</button><button>スクリーン</button><button>乗算</button><button>加算</button>
+        </div>
+        <p class="layer-sub">切り抜き（素材のどこを使うか）</p>
+        <div class="ctl">
+          <div class="ctl-label"><span>左</span><span class="val" id="layer-cx-val">0.00</span></div>
+          <input type="range" id="layer-cx" min="0" max="0.95" step="0.01" value="0" />
+        </div>
+        <div class="ctl">
+          <div class="ctl-label"><span>上</span><span class="val" id="layer-cy-val">0.00</span></div>
+          <input type="range" id="layer-cy" min="0" max="0.95" step="0.01" value="0" />
+        </div>
+        <div class="ctl">
+          <div class="ctl-label"><span>幅</span><span class="val" id="layer-cw-val">1.00</span></div>
+          <input type="range" id="layer-cw" min="0.05" max="1" step="0.01" value="1" />
+        </div>
+        <div class="ctl">
+          <div class="ctl-label"><span>高さ</span><span class="val" id="layer-ch-val">1.00</span></div>
+          <input type="range" id="layer-ch" min="0.05" max="1" step="0.01" value="1" />
+        </div>
+        <div id="layer-video-ctl" hidden>
+          <p class="layer-sub">再生する区間 <span class="val" id="layer-duration"></span></p>
+          <div class="clip-trim-fields">
+            <label>開始 <input id="layer-trim-start" type="number" min="0" step="0.1" /></label>
+            <label>終了 <input id="layer-trim-end" type="number" min="0.1" step="0.1" /></label>
+          </div>
+        </div>
       </div>
-      <div class="ctl">
-        <div class="ctl-label"><span>不透明度</span><span class="val" id="overlay-opacity-val">1.00</span></div>
-        <input type="range" id="overlay-opacity" min="0.05" max="1" step="0.01" value="1" />
-      </div>
-      <div class="seg" id="overlay-blend-seg">
-        <button class="sel">通常</button><button>スクリーン</button><button>乗算</button><button>加算</button>
-      </div>
-      <p class="text-hint">ドラッグで移動。合成した上からエフェクトが全体にかかります。</p>
+      <p class="text-hint">プレビュー上をドラッグしても動かせます。合成した上からエフェクトが全体にかかります。</p>
     </div>
 
     <div class="panel-section collapsible collapsed" data-sec="video">
@@ -278,6 +305,7 @@
 
 <input type="file" id="file-input" accept="image/*" hidden />
 <input type="file" id="overlay-input" accept="image/*" hidden />
+<input type="file" id="layer-video-input" accept="video/*" hidden />
 <input type="file" id="transb-input" accept="image/*,video/*" multiple hidden />
 <input type="file" id="bgm-input" accept="audio/*" hidden />
 <input type="file" id="project-input" accept="application/json,.json,.noiz.json" hidden />

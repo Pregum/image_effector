@@ -144,6 +144,7 @@ Copy `.dev.vars.example` to `.dev.vars` to get started.
 | Short video | Up to 8 cuts, 4 transitions, Ken Burns zoom, ratio crop (9:16 etc.), 1280px long edge, MP4 (H.264) preferred. Each cut remembers its own effects |
 | Music & BPM | Audio is muxed in as an AAC track. BPM is auto-detected and cuts land on the beat |
 | GIF export | Hand-written GIF89a encoder (median cut + dithering + LZW) |
+| Layers | Stack any number of images and videos over the base image. Each layer has its own order, opacity, blend mode and **source crop**; video layers also take a play range. Effects apply to the whole composite |
 | Gallery | Saves the source image and its recipe to R2 + D1. **Images are private by default** and readable only through expiring signed URLs |
 | Share links | Per-work `/w/<id>` pages whose OGP card shows **the edited image itself** (1200px long-edge JPEG). **Expire after about a day** |
 | Share on X | With a gallery backend, creates a share link first so the card shows the image. **AI-generated images can be shared without an access key** (the freshly generated picture is kept for about a day). Without a backend, posts the recipe URL |

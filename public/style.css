@@ -891,3 +891,26 @@ body.embed #view { max-height: 100vh; border: none; box-shadow: none; }
 .cloud-item b { font-weight: 500; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cloud-item small { color: var(--ink-dim); display: block; font-size: 10px; }
 .cloud-item button { padding: 2px 7px; font-size: 10.5px; }
+
+/* レイヤー一覧。上が手前（配列とは逆順に並べている） */
+.layer-list { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 3px; }
+.layer-row {
+  display: flex; align-items: center; gap: 2px;
+  border: 1px solid var(--line); background: #10130b; padding: 2px;
+}
+.layer-row.sel { border-color: var(--acid); background: #1a2012; }
+.layer-row button {
+  font-family: var(--font-dot); font-size: 11px; background: none; border: none;
+  color: var(--ink-dim); cursor: pointer; padding: 3px 4px;
+}
+.layer-row .layer-name {
+  flex: 1; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.layer-row.sel .layer-name, .layer-row.sel .layer-eye { color: var(--acid); }
+.layer-row button:hover:not(:disabled) { color: var(--acid); }
+.layer-row button:disabled { opacity: .3; cursor: default; }
+.layer-row .layer-del:hover { color: #ff3ea5; }
+.layer-sub {
+  font-family: var(--font-dot); font-size: 10px; color: var(--ink-dim);
+  margin: 10px 0 0; letter-spacing: 1px;
+}

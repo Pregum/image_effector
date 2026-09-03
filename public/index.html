@@ -176,6 +176,13 @@
         </div>
         <div id="layer-video-ctl" hidden>
           <p class="layer-sub">再生する区間 <span class="val" id="layer-duration"></span></p>
+          <div class="trim-range">
+            <div class="ctl-label"><span>開始</span><span class="val" id="layer-trim-start-val">0.0s</span></div>
+            <input type="range" id="layer-trim-start-range" min="0" max="1" step="0.1" value="0" />
+            <div class="ctl-label"><span>終了</span><span class="val" id="layer-trim-end-val">0.0s</span></div>
+            <input type="range" id="layer-trim-end-range" min="0" max="1" step="0.1" value="1" />
+            <p class="trim-used">使用 <b id="layer-trim-used">0.0s</b></p>
+          </div>
           <div class="clip-trim-fields">
             <label>開始 <input id="layer-trim-start" type="number" min="0" step="0.1" /></label>
             <label>終了 <input id="layer-trim-end" type="number" min="0.1" step="0.1" /></label>
@@ -205,6 +212,13 @@
       </div>
       <div class="clip-trim" id="clip-trim" hidden>
         <div class="clip-trim-head"><span id="clip-trim-name">動画クリップ</span><span id="clip-trim-length"></span></div>
+        <div class="trim-range">
+          <div class="ctl-label"><span>開始</span><span class="val" id="clip-trim-start-val">0.0s</span></div>
+          <input type="range" id="clip-trim-start-range" min="0" max="1" step="0.1" value="0" />
+          <div class="ctl-label"><span>終了</span><span class="val" id="clip-trim-end-val">0.0s</span></div>
+          <input type="range" id="clip-trim-end-range" min="0" max="1" step="0.1" value="1" />
+          <p class="trim-used">使用 <b id="clip-trim-used">0.0s</b></p>
+        </div>
         <div class="clip-trim-fields">
           <label>開始 <input id="clip-trim-start" type="number" min="0" step="0.1" /></label>
           <label>終了 <input id="clip-trim-end" type="number" min="0.1" step="0.1" /></label>

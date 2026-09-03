@@ -1222,12 +1222,11 @@ function syncLayerUI() {
   const isVideo = l.kind === "video";
   document.getElementById("layer-video-ctl").hidden = !isVideo;
   if (isVideo) {
-    const dur = Number.isFinite(l.video.duration) ? l.video.duration : 0;
-    document.getElementById("layer-trim-start").value = l.trimStart.toFixed(1);
-    document.getElementById("layer-trim-end").value = l.trimEnd.toFixed(1);
+    const dur = layerDuration(l);
     document.getElementById("layer-trim-start").max = Math.max(0, dur - 0.1).toFixed(1);
     document.getElementById("layer-trim-end").max = dur.toFixed(1);
     document.getElementById("layer-duration").textContent = `${dur.toFixed(1)}s`;
+    syncTrimUi("layer-trim", l.trimStart, l.trimEnd, dur);
   }
 }
 
@@ -1269,18 +1268,39 @@ document.getElementById("layer-blend-seg").querySelectorAll("button").forEach((b
   });
 });
 
+const layerDuration = (l) => (Number.isFinite(l.video?.duration) ? l.video.duration : 0);
+
+// 数値入力・スライダーのどちらから来ても、ここで区間を確定させる
+function applyLayerTrim() {
+  const l = layers[activeLayer];
+  if (!l || l.kind !== "video") return;
+  const dur = layerDuration(l);
+  const start = Math.min(Math.max(0, +document.getElementById("layer-trim-start-range").value || 0), Math.max(0, dur - 0.1));
+  const end = Math.min(Math.max(start + 0.1, +document.getElementById("layer-trim-end-range").value || dur), dur);
+  l.trimStart = start;
+  l.trimEnd = end;
+  l.video.currentTime = start;
+  syncTrimUi("layer-trim", start, end, dur);
+}
+
 for (const [id, key] of [["layer-trim-start", "trimStart"], ["layer-trim-end", "trimEnd"]]) {
   document.getElementById(id).addEventListener("change", (e) => {
     const l = layers[activeLayer];
     if (!l || l.kind !== "video") return;
-    const dur = Number.isFinite(l.video.duration) ? l.video.duration : 0;
-    const v = Math.min(Math.max(0, +e.target.value || 0), dur);
-    l[key] = v;
-    if (l.trimEnd <= l.trimStart) l.trimEnd = Math.min(dur, l.trimStart + 0.1);
-    l.video.currentTime = l.trimStart;
-    syncLayerUI();
+    l[key] = Math.min(Math.max(0, +e.target.value || 0), layerDuration(l));
+    document.getElementById(`${id}-range`).value = l[key];
+    applyLayerTrim();
   });
 }
+
+wireTrimRanges(
+  "layer-trim",
+  () => {
+    const l = layers[activeLayer];
+    return l?.kind === "video" ? { start: l.trimStart, end: l.trimEnd, duration: layerDuration(l) } : null;
+  },
+  applyLayerTrim
+);
 
 // 指定クライアント座標がレイヤーの矩形内か（ドラッグ対象の判定用）。
 // 手前のレイヤーから調べ、最初に当たったものを掴む
@@ -1727,6 +1747,40 @@ const slideStrip = document.getElementById("slide-strip");
 const clipTrim = document.getElementById("clip-trim");
 const clipTrimStart = document.getElementById("clip-trim-start");
 const clipTrimEnd = document.getElementById("clip-trim-end");
+
+// 動画の切り出し区間のUI。数値入力とスライダーの両方を同じ値に保ち、
+// 「結局どれだけ使うのか」が分かるように使用尺も出す（prefix: clip-trim / layer-trim）
+function syncTrimUi(prefix, start, end, duration) {
+  const el = (suffix) => document.getElementById(`${prefix}-${suffix}`);
+  const startRange = el("start-range");
+  const endRange = el("end-range");
+  startRange.max = Math.max(0.1, duration - 0.1).toFixed(1);
+  endRange.max = Math.max(0.1, duration).toFixed(1);
+  startRange.value = start;
+  endRange.value = end;
+  el("start-val").textContent = `${start.toFixed(1)}s`;
+  el("end-val").textContent = `${end.toFixed(1)}s`;
+  el("used").textContent = `${Math.max(0, end - start).toFixed(1)}s`;
+  el("start").value = start.toFixed(1);
+  el("end").value = end.toFixed(1);
+}
+
+// スライダーは動かしている間は表示だけ更新し、離したときに実際へ反映する
+// （ドラッグ中に毎回シークすると重いため）
+function wireTrimRanges(prefix, read, apply) {
+  for (const which of ["start", "end"]) {
+    const range = document.getElementById(`${prefix}-${which}-range`);
+    range.addEventListener("input", () => {
+      const cur = read();
+      if (!cur) return;
+      const v = +range.value;
+      const start = which === "start" ? Math.min(v, cur.end - 0.1) : cur.start;
+      const end = which === "end" ? Math.max(v, cur.start + 0.1) : cur.end;
+      syncTrimUi(prefix, start, end, cur.duration);
+    });
+    range.addEventListener("change", apply);
+  }
+}
 let selectedSlide = -1;
 
 // 経過時間から「どのカット同士を、どの遷移位置・ズームで描くか」を純粋計算する
@@ -2251,8 +2305,7 @@ function selectSlide(i) {
     document.getElementById("clip-trim-length").textContent = `${s.duration.toFixed(1)}s`;
     clipTrimStart.max = Math.max(0, s.duration - 0.1);
     clipTrimEnd.max = s.duration;
-    clipTrimStart.value = s.trimStart.toFixed(1);
-    clipTrimEnd.value = s.trimEnd.toFixed(1);
+    syncTrimUi("clip-trim", s.trimStart, s.trimEnd, s.duration);
   }
   renderSlideStrip();
 }
@@ -2388,8 +2441,7 @@ async function applyTrimInputs() {
   if (end <= start) end = Math.min(s.duration, start + 0.1);
   s.trimStart = start;
   s.trimEnd = end;
-  clipTrimStart.value = start.toFixed(1);
-  clipTrimEnd.value = end.toFixed(1);
+  syncTrimUi("clip-trim", start, end, s.duration);
   await seekVideo(s.video, start);
   uploadSlide(s);
   updateSeqNote();
@@ -2397,6 +2449,14 @@ async function applyTrimInputs() {
 }
 clipTrimStart.addEventListener("change", applyTrimInputs);
 clipTrimEnd.addEventListener("change", applyTrimInputs);
+wireTrimRanges(
+  "clip-trim",
+  () => {
+    const s = slides[selectedSlide];
+    return s?.kind === "video" ? { start: s.trimStart, end: s.trimEnd, duration: s.duration } : null;
+  },
+  applyTrimInputs
+);
 
 // ---- ローカルプロジェクト（素材Blob + 編集内容をIndexedDBへ保存）
 const projectNote = document.getElementById("project-note");

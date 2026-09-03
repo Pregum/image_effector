@@ -74,6 +74,7 @@ const EN = {
   "動画を追加": "Add video",
   "切り抜き（素材のどこを使うか）": "Crop (which part of the source to use)",
   "再生する区間": "Play range",
+  "使用": "Using",
   "左": "Left",
   "上": "Top",
   "幅": "Width",

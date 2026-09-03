@@ -914,3 +914,12 @@ body.embed #view { max-height: 100vh; border: none; box-shadow: none; }
   font-family: var(--font-dot); font-size: 10px; color: var(--ink-dim);
   margin: 10px 0 0; letter-spacing: 1px;
 }
+
+/* 動画の切り出し区間。数値入力だけだと尺の見当がつかないのでスライダーを添える */
+.trim-range { margin-top: 6px; }
+.trim-range input[type="range"] { margin-bottom: 4px; }
+.trim-used {
+  font-family: var(--font-dot); font-size: 10px; color: var(--ink-dim);
+  margin: 4px 0 0; letter-spacing: 1px;
+}
+.trim-used b { font-family: var(--font-mono); color: var(--acid); font-weight: 400; }

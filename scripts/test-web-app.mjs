@@ -202,6 +202,63 @@ async function serveDir(dir) {
   return { port: server.address().port, close: () => new Promise((r) => server.close(r)) };
 }
 
+// 時事クロスワードの検証コード（crossword.js の末尾に足す）。
+// モジュールスコープの state / placeAt を直接触って、1盤を最後まで解かせる。
+const CW_HARNESS = `
+// ---- 回帰テスト用（scripts/test-web-app.mjs が末尾に足す。本番には入らない）----
+(async () => {
+  if (!location.hash.includes("t=cw")) return;
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  const out = [];
+  try {
+    for (let i = 0; i < 60 && !state.puzzle; i++) await wait(50);
+    if (!state.puzzle) throw new Error("no puzzle");
+    out.push("demo=" + state.demo);
+    out.push("entries=" + state.puzzle.entries.length);
+    out.push("cells=" + document.querySelectorAll(".cw-cell:not(.is-void)").length);
+    out.push("clues=" + document.querySelectorAll(".cw-clue").length);
+    el.start.click();
+    out.push("running=" + state.running);
+
+    // タイルをタップして選び、マスをタップして置く（画面の操作そのまま）
+    const target = state.puzzle.cells.find((c) => c.ch && !state.filled.has(key(c.x, c.y)));
+    const idx = state.rack.findIndex((t) => t.ch === target.ch && !t.used);
+    const tile = document.querySelector('.cw-tile[data-idx="' + idx + '"]');
+    tile.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, clientX: 10, clientY: 10 }));
+    document.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, clientX: 10, clientY: 10 }));
+    out.push("picked=" + (state.picked === idx));
+    document.querySelector('.cw-cell[data-x="' + target.x + '"][data-y="' + target.y + '"]').click();
+    out.push("tapPlaced=" + (state.filled.get(key(target.x, target.y))?.ch === target.ch));
+
+    // 違う字では語が成立しない
+    const other = state.puzzle.cells.find((c) => c.ch && !state.filled.has(key(c.x, c.y)));
+    const bad = state.rack.findIndex((t) => !t.used && t.ch !== other.ch);
+    if (bad >= 0) {
+      placeAt(other.x, other.y, bad);
+      out.push("wrongKept=" + (state.solved.size === 0));
+      takeBack(other.x, other.y);
+      out.push("tookBack=" + !state.filled.has(key(other.x, other.y)));
+    }
+
+    for (const c of state.puzzle.cells) {
+      if (!c.ch || state.filled.has(key(c.x, c.y))) continue;
+      const i = state.rack.findIndex((t) => t.ch === c.ch && !t.used);
+      if (i < 0) { out.push("missingTile=" + c.ch); continue; }
+      placeAt(c.x, c.y, i);
+    }
+    out.push("solved=" + (state.solved.size === state.puzzle.entries.length));
+    out.push("detail=" + !el.detail.hidden);
+    out.push("chart=" + document.querySelectorAll("#cw-detail-body .cw-chart rect").length);
+    out.push("result=" + !el.result.hidden);
+    out.push("stopped=" + !state.running);
+    out.push("filledAll=" + /^[^?]+$/.test(solutionText()));
+    document.title = "OK|" + out.join("|");
+  } catch (err) {
+    document.title = "ERR|" + err.message + "|" + out.join("|");
+  }
+})();
+`;
+
 // --dump-dom は仮想時間の予算を使い切った時点のDOMを出す。
 // 検証コードは結果を <title> に書くので、そこだけ読めばよい。
 function runChrome(chrome, url, budgetMs) {
@@ -261,6 +318,18 @@ async function main() {
     await writeFile(join(work, "index.html"), html);
     await writeFile(join(work, "app.js"), (await readFile(join(work, "app.js"), "utf8")) + HARNESS);
 
+    const cwHtml = (await readFile(join(work, "crossword.html"), "utf8")).replace(
+      '<script type="module" src="./crossword.js"></script>',
+      '<script>window.addEventListener("error", (e) => {'
+      + 'document.title = "ERR|" + (e.message || "") + " @" + (e.filename || "").split("/").pop() + ":" + e.lineno;'
+      + '}, true);</script>\n<script type="module" src="./crossword.js"></script>',
+    );
+    await writeFile(join(work, "crossword.html"), cwHtml);
+    await writeFile(
+      join(work, "crossword.js"),
+      (await readFile(join(work, "crossword.js"), "utf8")) + CW_HARNESS,
+    );
+
     const { port, close } = await serveDir(work);
     const base = `http://127.0.0.1:${port}/`;
     try {
@@ -301,6 +370,27 @@ async function main() {
         check("書き出しキャンバスへ焼き込まれる", Number(f.burnIn) > 1, `RMSE ${f.burnIn}`);
         check("長い字幕は2行に収まる", f.wrap === "2", f.wrap);
         check("プレビューに字幕が重なる", f.overlay === "true:true", f.overlay);
+      }
+      // --- 時事クロスワード ---
+      // バックエンドが無いのでデモ盤に落ちる。そのまま1盤を解き切らせる
+      console.log("時事クロスワード");
+      const cw = parseTitle(await runChrome(chrome, `${base}crossword.html#t=cw`, 30000));
+      check("盤面が組み上がる", cw.ok, cw.ok ? "" : cw.raw);
+      if (cw.ok) {
+        const f = cw.fields;
+        check("バックエンド無しではデモ盤になる", f.demo === "true", f.demo);
+        check("ヒントの数と語の数が合う", f.clues === f.entries, `${f.clues}/${f.entries}`);
+        check("マスが描かれる", Number(f.cells) > 0, f.cells);
+        check("スタートでタイムが動き出す", f.running === "true", f.running);
+        check("タイルをタップして選べる", f.picked === "true", f.picked);
+        check("選んだ字をマスに置ける", f.tapPlaced === "true", f.tapPlaced);
+        check("違う字では正解にならない", f.wrongKept === "true", f.wrongKept);
+        check("置いた字を戻せる", f.tookBack === "true", f.tookBack);
+        check("手持ちの字だけで盤が埋まる", f.filledAll === "true", f.filledAll);
+        check("全部の語が正解になる", f.solved === "true", f.solved);
+        check("正解した語の詳細が出る", f.detail === "true", f.detail);
+        check("話題量のチャートが描かれる", Number(f.chart) > 0, f.chart);
+        check("クリア画面が出てタイムが止まる", f.result === "true" && f.stopped === "true", `${f.result}/${f.stopped}`);
       }
     } finally {
       await close();

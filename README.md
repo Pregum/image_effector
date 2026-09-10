@@ -212,6 +212,7 @@ AI_MODEL_EMBED=bge-m3
 | `AI_API_KEY` | なし | `openai` 時のキー（ローカルAIなら不要な場合が多い） |
 | `AI_MODEL_CHAT` ほか | プロバイダ既定 | 使用モデル名（`_CHAT_SMALL` / `_IMAGE` / `_VISION` / `_EMBED`） |
 | `AI_DAILY_CAP` | `8000` | 1日あたりのAI予算。超えると503を返して止まる |
+| `NEWS_FEEDS` | Googleニュース9本 | 時事クロスワードが読むRSS/AtomのURL（カンマ区切り。`https://` のみ） |
 | `WEB_ANALYTICS_TOKEN` | なし | Cloudflare Web Analyticsのトークン。設定時だけビーコンを読み込む |
 | `GA_MEASUREMENT_ID` | なし | GA4の測定ID。設定時だけgtagを読み込む |
 | `PLAUSIBLE_DOMAIN` / `PLAUSIBLE_SRC` | なし | Plausible等に登録したドメインとスクリプトURL |
@@ -240,6 +241,7 @@ AI_MODEL_EMBED=bge-m3
 | ナレッジグラフ | 保存作品をノードにした2D/3Dフォースグラフ。キャプション+埋め込みの意味類似とレシピ類似でエッジを生成 |
 | 掛け合わせ | 2作品のレシピを交叉した子作品を生成。系譜エッジで可視化 |
 | 次の一手 | グラフの構造的な穴を検出し、それを埋める作品をLLMが提案。その場で生成できる |
+| 時事クロスワード | 直近24時間/1週間/1か月のニュースから自動生成。文字タイルを置いて解き、タイムを競う。正解した語には根拠記事TOP3と話題量チャートが付く（[詳細](#時事クロスワード)） |
 | 保護 | IPごとのレート制限 (Durable Objects) と日次AI予算ガード |
 | 多言語 | 日本語・英語のUI。自動判定＋切替ボタン。`/#lang=en` で直リンク可 |
 | 利用状況の計測 | 機能ごとの利用回数をAnalytics Engineへ。Cookie・訪問者IDなし。未設定なら完全に無効（[詳細](#利用状況の計測)） |
@@ -250,13 +252,18 @@ AI_MODEL_EMBED=bge-m3
 ```
 public/          静的アセット（これだけでTier 1として動く）
   app.js         WebGL2パイプライン・UI・ピクセルソート・GIFエンコーダ・グラフ
+  crossword.html 時事クロスワードの画面（crossword.css / crossword.js）
+  crossword-core.js 見出し→盤面の生成（Worker・ブラウザ・Nodeで共用する純関数）
   project-format.js 共通Project JSONの生成・検証・読み込み
   i18n.js        日本語・英語の文言
   analytics.js   利用イベントの送信（送信先が無ければ何もしない）
   about.html     サイトの説明ページ（英語版は about-en.html）
 src/
-  worker.js      APIルーティング・ギャラリー・共有・レート制限
+  worker.js      APIルーティング・ギャラリー・共有・レート制限・cron
   ai.js          AIプロバイダの抽象化（workers-ai / openai / none）
+  news.js        RSS/Atomの取得と解析（依存パッケージ無し）
+  newsroute.js   時事クロスワードの収集・出題・ランキング
+  json.js        LLMの返事からJSONだけを取り出す
 schema.sql       D1スキーマ
 schemas/         Web / Desktop / Mobile / MCPで共有するJSON Schema
 mcp/
@@ -270,6 +277,42 @@ wrangler.jsonc   Workers設定（fork時は name / database_id / bucket_name を
 
 **外部ライブラリを使っていません。** フォースグラフの力学シミュレーション、GIFのLZW圧縮と減色、
 ピクセルソート、全エフェクトのシェーダーはすべて自前実装です（`package.json` もありません）。
+
+## 時事クロスワード
+
+`/crossword` は、**直近のニュースからその場で組み上がるクロスワード**です。1分で解ける大きさに
+してあり、同じ盤を解いた人どうしでタイムを競えます。バックエンドが無い構成ではサンプル見出しのデモ盤になります。
+
+```
+cron（毎時）→ RSSを取得 → 見出しだけをD1へ
+                                  ↓
+        期間で絞る（24時間 / 1週間 / 1か月）
+                                  ↓
+  カタカナ語を頻度＋鮮度＋媒体の数で採点 → 上位を交差配置 → 盤面
+                                  ↓
+        LLMが出題文と解説を作る（無ければ見出しの伏せ字）
+```
+
+- **盤に載るのはカタカナ語だけ**です。漢字の読みを得るには辞書が要り、それは「依存を増やさない」
+  という決めごとと両立しません。時事の見出しはカタカナ語（人名・企業名・競技名・製品名）が
+  濃いので、これで十分に成立します。小書き文字（ャュョッ）は日本語のクロスワードの慣例どおり
+  大きい字1マスとして扱います
+- **手持ちの文字を置いて解きます**（もじぴったんの要領）。空きマスぶんの文字＋おじゃま数枚が
+  ラックに並び、タップかドラッグでマスへ置きます。語が正しく埋まるとその場で確定します
+- **正解した語には裏側が付きます**。LLMの解説、根拠になった記事TOP3（媒体が散るように選ぶ）、
+  期間内の話題量チャート（1日なら1時間刻み、1週間/1か月なら1日刻み）
+- **出題は期間ごとにキャッシュ**されます（24時間=3時間、1週間=12時間、1か月=24時間）。
+  同じ盤を全員が解くのでタイムを比べられ、AIを呼ぶのは1日あたり数回で済みます
+- 記事は**見出し・媒体・掲載時刻・リンクだけ**を保存します（本文は取りません）。35日で消えます
+
+| エンドポイント | 説明 |
+|---|---|
+| `GET /api/news/puzzle?range=1d\|1w\|1m` | 出題データ（盤・ヒント・根拠・話題量）。期間ごとにキャッシュ |
+| `GET /api/news/scores?puzzle=<id>` | その盤のタイム上位20件 |
+| `POST /api/news/scores` | タイムの登録。盤の答えのハッシュが合ったものだけ受け付ける |
+| `POST /api/news/refresh` | 手動で収集する（`x-gallery-key` が必要） |
+
+D1（`DB`）が無い構成では、この機能は自動的に無効になります（`/api/config` の `news`）。
 
 ## 利用状況の計測
 
@@ -320,6 +363,7 @@ npx wrangler deploy   # デプロイ
 
 node scripts/test-project-format.mjs   # Project JSONの往復テスト
 node scripts/test-mcp-server.mjs       # MCPツールとstdio越しのJSON-RPC
+node scripts/test-crossword.mjs        # 見出しの解析・語の抽出・盤面の組み立て
 node scripts/test-web-app.mjs          # headless Chromeで実際に描画させる回帰テスト
 ```
 

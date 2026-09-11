@@ -79,6 +79,10 @@ const CLIENT_EVENTS = new Set([
   "open_image",  // 自分の画像を開いた
   "export",      // 書き出し（label = png / mp4 / webm / gif）
   "share",       // 共有ボタン（label = image / url）
+  "cw_open",     // 時事クロスワードを開いた（label = 期間）
+  "cw_start",    // 実際に解き始めた（label = 期間）
+  "cw_clear",    // 全問正解した（label = 期間、value = 秒）
+  "cw_hint",     // ヒントを使った（label = 期間）
 ]);
 
 const MAX_EVENT_BODY = 4096;

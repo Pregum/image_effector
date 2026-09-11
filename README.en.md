@@ -165,6 +165,7 @@ public/          Static assets (this alone runs as Tier 1)
   app.js         WebGL2 pipeline, UI, pixel sort, GIF encoder, graph
   crossword.html The news crossword page (crossword.css / crossword.js)
   crossword-core.js  Headlines to grid (pure functions shared by Worker, browser and Node)
+  romaji.js      Rōmaji to katakana, one keystroke at a time
   project-format.js  Shared Project JSON builder, validator and parser
   i18n.js        Japanese/English strings
   analytics.js   Usage event sender (a no-op when there is no endpoint)
@@ -276,6 +277,10 @@ cron (hourly) -> fetch RSS -> store headlines in D1
   Small kana are written full size in one square, as Japanese crosswords normally do
 - **You solve it by dropping letter tiles**, Mojipittan style. The rack holds exactly the letters the
   blanks need plus a few decoys; tap or drag them onto the grid. A word locks the moment it is right
+- **On a keyboard you can just type it in rōmaji.** Pick a square, type `wa-rudokappu`, and ワールドカツプ
+  lands letter by letter. Waiting on an IME's candidate window would cost you the time you are racing
+  against, so the converter (`public/romaji.js`) is written here (space flips across/down, arrows move,
+  backspace deletes)
 - **Every solved word opens up.** The LLM's explanation, the top 3 articles behind it (picked so the
   outlets differ), and a chart of how much it was talked about (hourly for a day, daily otherwise)
 - **Puzzles are cached per window** (3h for the day, 12h for the week, 24h for the month), so

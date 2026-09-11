@@ -179,6 +179,13 @@ npx wrangler deploy
 
 `GALLERY_KEY` を設定しなければギャラリー機能は無効のまま、AI機能だけ使えます。
 
+**PCが手元に無いときは GitHub から**: リポジトリのSecretに `CLOUDFLARE_API_TOKEN`
+（Cloudflareの「Edit Cloudflare Workers」テンプレートで発行）を入れておくと、
+Actions → deploy → Run workflow のボタンでデプロイできます。初回は
+「schema.sql をD1へ適用」をONに、収集URL（`https://<ホスト>/api/news/refresh`）を
+入れておくと、そのまま最初の見出し集めまで済みます（`GALLERY_KEY` のSecretが要ります）。
+自動では走りません。
+
 ### Tier 3: AIを自前のものに差し替える
 
 AIの利用は4種類（テキスト生成 / テキスト→画像 / 画像→テキスト / 埋め込み）だけで、

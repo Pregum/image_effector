@@ -91,6 +91,12 @@ npx wrangler deploy
 
 If you skip `GALLERY_KEY` the gallery stays disabled and only the AI features run.
 
+**No laptop around?** Put a `CLOUDFLARE_API_TOKEN` repository secret in place (the
+"Edit Cloudflare Workers" template is enough) and deploy from Actions → deploy →
+Run workflow. On the first run, leave "apply schema.sql" on and pass your
+`https://<host>/api/news/refresh` URL to collect the first headlines in the same run
+(that part also needs a `GALLERY_KEY` secret). It never runs on its own.
+
 ### Tier 3: swap in your own AI
 
 The app needs exactly four AI operations — text generation, text→image, image→text and

@@ -1,0 +1,67 @@
+name: deploy
+
+# 手元にPCが無いときでも、GitHubのボタン（Actions → deploy → Run workflow）から
+# デプロイできるようにするためのワークフロー。自動では走らない。
+#
+# 事前に用意するもの:
+#   CLOUDFLARE_API_TOKEN  （必須）リポジトリのSecret。Cloudflareの
+#                         「Edit Cloudflare Workers」テンプレートで発行したトークン
+#   CLOUDFLARE_ACCOUNT_ID （任意）アカウントが複数ある場合だけ必要
+#   GALLERY_KEY           （任意）下の refresh_url を使うときだけ必要
+
+on:
+  workflow_dispatch:
+    inputs:
+      apply_schema:
+        description: "schema.sql をD1へ適用する（テーブルが無い初回はON）"
+        type: boolean
+        default: true
+      refresh_url:
+        description: "デプロイ後に叩く収集URL（例: https://example.com/api/news/refresh）。空なら叩かない"
+        type: string
+        default: ""
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # 壊れたものをデプロイしないよう、先にテストを通す
+      - run: node scripts/test-project-format.mjs
+      - run: node scripts/test-mcp-server.mjs
+      - run: node scripts/test-crossword.mjs
+
+      # CREATE TABLE IF NOT EXISTS だけなので、既存のテーブルには触らない
+      - name: D1スキーマを適用
+        if: ${{ inputs.apply_schema }}
+        run: npx wrangler d1 execute noiz-lab --remote --file schema.sql
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: デプロイ
+        run: npx wrangler deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      # cron（毎時7分）を待たずに、最初の見出しを集めておく
+      - name: 最初の収集を起こす
+        if: ${{ inputs.refresh_url != '' }}
+        run: |
+          if [ -z "$GALLERY_KEY" ]; then
+            echo "GALLERY_KEY のSecretが無いので収集は省略します" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          echo "### 収集の結果" >> "$GITHUB_STEP_SUMMARY"
+          echo '```json' >> "$GITHUB_STEP_SUMMARY"
+          curl -sS -X POST "${{ inputs.refresh_url }}" -H "x-gallery-key: $GALLERY_KEY" \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+          echo '' >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+        env:
+          GALLERY_KEY: ${{ secrets.GALLERY_KEY }}

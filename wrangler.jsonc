@@ -7,7 +7,7 @@
     "binding": "ASSETS",
     // OGPの絶対URLを配信時に埋めるため、HTMLのページだけWorkerを先に通す。
     // LT資料は配下に数MBの動画があるので、HTMLのパスだけを指定する（/* にはしない）
-    "run_worker_first": ["/", "/about", "/about-en", "/pizza-ai-tooling-lt/"]
+    "run_worker_first": ["/", "/about", "/about-en", "/crossword", "/pizza-ai-tooling-lt/"]
   },
   "ai": {
     "binding": "AI"
@@ -40,6 +40,10 @@
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["RateLimiter"] }
   ],
+  // 時事ネタの収集。1時間ごとにRSSを取りに行く（無料枠で足りる頻度）
+  "triggers": {
+    "crons": ["7 * * * *"]
+  },
   "observability": {
     "enabled": true
   }

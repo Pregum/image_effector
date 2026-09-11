@@ -30,15 +30,16 @@ AIとギャラリー以外の全機能が使えます（`file://` では動き�
 
 ## テスト
 
-変更を送る前に、この3本を通してください。
+変更を送る前に、この4本を通してください。
 
 ```sh
 node scripts/test-project-format.mjs   # Project JSONの往復
 node scripts/test-mcp-server.mjs       # MCPツールとstdio越しのJSON-RPC
+node scripts/test-crossword.mjs        # 見出しの解析・語の抽出・盤面の組み立て
 node scripts/test-web-app.mjs          # headless Chromeで実際に描画させる回帰テスト
 ```
 
-3本目は `public/` を一時ディレクトリへ複製し、検証コードを足して headless Chrome で
+4本目は `public/` を一時ディレクトリへ複製し、検証コードを足して headless Chrome で
 実際に描画させます。シェーダやWebGLまわりを触ったときは、必ずこれを通してください。
 Chromeが見つからない環境では自動でスキップします（`CHROME_BIN` で場所を指定できます）。
 

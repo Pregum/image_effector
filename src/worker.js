@@ -1,5 +1,13 @@
 import { DurableObject } from "cloudflare:workers";
 import { getAiProvider } from "./ai.js";
+import { extractJson } from "./json.js";
+import {
+  newsEnabled,
+  puzzleRoute,
+  refreshAll,
+  scoresRoute,
+  submitScoreRoute,
+} from "./newsroute.js";
 
 const WINDOW_MS = 60_000; // レート制限ウィンドウ幅
 
@@ -71,6 +79,10 @@ const CLIENT_EVENTS = new Set([
   "open_image",  // 自分の画像を開いた
   "export",      // 書き出し（label = png / mp4 / webm / gif）
   "share",       // 共有ボタン（label = image / url）
+  "cw_open",     // 時事クロスワードを開いた（label = 期間）
+  "cw_start",    // 実際に解き始めた（label = 期間）
+  "cw_clear",    // 全問正解した（label = 期間、value = 秒）
+  "cw_hint",     // ヒントを使った（label = 期間）
 ]);
 
 const MAX_EVENT_BODY = 4096;
@@ -870,29 +882,6 @@ const SCENE_SYSTEM = [
   'Example. User: 桜舞う神社の夕暮れ → {"sky":["#4a2c5e","#c66a8a","#ffb98a"],"horizon":0.7,"celestial":{"type":"sun","x":0.35,"y":0.45,"r":0.07,"color":"#ffdca0","glow":"#ff8a5c"},"stars":0,"clouds":{"count":3,"color":"#7a4a6e"},"ground":{"type":"plain","colors":["#241530"]},"rain":0,"snow":0,"sakura":90,"birds":3,"fireworks":[],"aurora":null,"torii":{"x":0.5,"size":0.42,"color":"#2e0f1c"},"signs":[]}',
 ].join("\n");
 
-// 応答の前後にゴミが付いても最後にパースできる閉じ括弧まで遡って抽出する（配列/オブジェクト両対応）
-function extractJson(text) {
-  const tryFrom = (open, close) => {
-    const start = text.indexOf(open);
-    if (start < 0) return null;
-    let end = text.lastIndexOf(close);
-    while (end > start) {
-      try {
-        return JSON.parse(text.slice(start, end + 1));
-      } catch { /* ひとつ前の閉じ括弧で再試行 */ }
-      end = text.lastIndexOf(close, end - 1);
-    }
-    return null;
-  };
-  const objAt = text.indexOf("{");
-  const arrAt = text.indexOf("[");
-  // 先に現れた方を優先して試す
-  if (arrAt >= 0 && (objAt < 0 || arrAt < objAt)) {
-    return tryFrom("[", "]") ?? tryFrom("{", "}");
-  }
-  return tryFrom("{", "}") ?? tryFrom("[", "]");
-}
-
 async function sceneRoute(req, env, ai) {
   if (!(await rateLimit(env, clientIp(req) + "#scene", 10))) {
     return json({ error: "rate limited" }, 429);
@@ -1249,6 +1238,8 @@ export default {
           ai: !!ai,
           gallery,
           aiProvider: ai?.name ?? "none",
+          // 見出しを貯めるD1が無い構成では、時事クロスワードは出さない
+          news: newsEnabled(env),
           // 計測先が無い構成では、クライアントはイベントを一切送らない
           analytics: !!env.ANALYTICS,
         }),
@@ -1295,6 +1286,32 @@ export default {
     if (pathname === "/api/suggest" && req.method === "POST") {
       if (!ai) return disabled("ai");
       return tracked(env, req, "ai_suggest", suggestRoute(req, env, ai));
+    }
+
+    // --- 時事クロスワード ---
+    if (pathname.startsWith("/api/news/")) {
+      if (!newsEnabled(env)) return disabled("news");
+      // ヒント生成は小さいモデル1回ぶん。無料枠の手前で自分から止める
+      const spend = () => spendAiBudget(env, AI_COST.llm8b);
+
+      if (pathname === "/api/news/puzzle" && req.method === "GET") {
+        return tracked(env, req, "news_puzzle", puzzleRoute(req, env, { ai, spend }));
+      }
+      if (pathname === "/api/news/scores" && req.method === "GET") {
+        return scoresRoute(req, env);
+      }
+      if (pathname === "/api/news/scores" && req.method === "POST") {
+        return tracked(
+          env, req, "news_score",
+          submitScoreRoute(req, env, { rateLimit, ip: clientIp(req) })
+        );
+      }
+      // 手動での収集。cronを待たずに試すためのもので、アクセスキーが要る
+      if (pathname === "/api/news/refresh" && req.method === "POST") {
+        if (!authed(req, env)) return json({ error: "unauthorized" }, 401);
+        return json(await refreshAll(env, { ai, spend }));
+      }
+      return json({ error: "not found" }, 404);
     }
 
     if (pathname.startsWith("/api/projects")) {
@@ -1356,5 +1373,18 @@ export default {
 
     // OGPの絶対URLはデプロイ先で変わるため、配信時にoriginを埋める
     return decorateHtml(await env.ASSETS.fetch(req), url.origin, env);
+  },
+
+  // 時事ネタの収集。wrangler.jsonc の crons で1時間ごとに呼ばれる。
+  // 収集のついでに、期限の切れた出題を組み直しておく（最初の訪問者を待たせない）。
+  async scheduled(event, env, ctx) {
+    if (!newsEnabled(env)) return;
+    const ai = getAiProvider(env);
+    const spend = () => spendAiBudget(env, AI_COST.llm8b);
+    ctx.waitUntil(
+      refreshAll(env, { ai, spend })
+        .then((r) => console.log("news refresh", JSON.stringify(r)))
+        .catch((err) => console.error("news refresh failed", err))
+    );
   },
 };

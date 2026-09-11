@@ -91,6 +91,12 @@ npx wrangler deploy
 
 If you skip `GALLERY_KEY` the gallery stays disabled and only the AI features run.
 
+**No laptop around?** Put a `CLOUDFLARE_API_TOKEN` repository secret in place (the
+"Edit Cloudflare Workers" template is enough) and deploy from Actions → deploy →
+Run workflow. On the first run, leave "apply schema.sql" on and pass your
+`https://<host>/api/news/refresh` URL to collect the first headlines in the same run
+(that part also needs a `GALLERY_KEY` secret). It never runs on its own.
+
 ### Tier 3: swap in your own AI
 
 The app needs exactly four AI operations — text generation, text→image, image→text and
@@ -125,6 +131,7 @@ AI_MODEL_EMBED=bge-m3
 | `AI_API_KEY` | none | Key for the `openai` provider (often unnecessary for local models) |
 | `AI_MODEL_CHAT` etc. | provider default | Model names (`_CHAT_SMALL` / `_IMAGE` / `_VISION` / `_EMBED`) |
 | `AI_DAILY_CAP` | `8000` | Daily AI budget. Requests return 503 once exceeded |
+| `NEWS_FEEDS` | 9 Google News feeds | RSS/Atom URLs the news crossword reads (comma separated, `https://` only) |
 | `WEB_ANALYTICS_TOKEN` | none | Cloudflare Web Analytics token. The beacon loads only when set |
 | `GA_MEASUREMENT_ID` | none | GA4 measurement ID. gtag loads only when set |
 | `PLAUSIBLE_DOMAIN` / `PLAUSIBLE_SRC` | none | Domain registered with Plausible (or a compatible script) and its script URL |
@@ -151,6 +158,7 @@ Copy `.dev.vars.example` to `.dev.vars` to get started.
 | Knowledge graph | A 2D/3D force-directed graph of saved works, linked by semantic similarity (caption + embedding) and recipe similarity |
 | Crossbreeding | Blend two works' recipes into a child work, visualised with lineage edges |
 | What's next | Detects structural gaps in the graph and has an LLM suggest works that would fill them, creatable in one click |
+| News crossword | Generated from the last 24 hours / week / month of headlines. Drop letter tiles to solve it and race the clock; every solved word comes with its top 3 sources and a buzz chart ([details](#news-crossword)) |
 | Protection | Per-IP rate limiting (Durable Objects) and a daily AI budget guard |
 | i18n | Japanese and English UI. Auto-detected, switchable, and deep-linkable via `/#lang=en` |
 | PWA | Manifest + service worker (network-first) |
@@ -161,13 +169,19 @@ Copy `.dev.vars.example` to `.dev.vars` to get started.
 ```
 public/          Static assets (this alone runs as Tier 1)
   app.js         WebGL2 pipeline, UI, pixel sort, GIF encoder, graph
+  crossword.html The news crossword page (crossword.css / crossword.js)
+  crossword-core.js  Headlines to grid (pure functions shared by Worker, browser and Node)
+  romaji.js      Rōmaji to katakana, one keystroke at a time
   project-format.js  Shared Project JSON builder, validator and parser
   i18n.js        Japanese/English strings
   analytics.js   Usage event sender (a no-op when there is no endpoint)
   about.html     About page (about-en.html for English)
 src/
-  worker.js      API routing, gallery, sharing, rate limiting
+  worker.js      API routing, gallery, sharing, rate limiting, cron
   ai.js          AI provider abstraction (workers-ai / openai / none)
+  news.js        RSS/Atom fetching and parsing (no dependencies)
+  newsroute.js   News crossword: collection, puzzles and the leaderboard
+  json.js        Pulls the JSON back out of an LLM reply
 mcp/
   server.mjs     MCP server (stdio JSON-RPC, no dependencies)
   tools.mjs      The tools that assemble a Project JSON
@@ -245,6 +259,50 @@ Rendering is a multi-pass pipeline: source (＋ CPU pixel sort) → separable Ga
 blur → luminance extraction + blur (halation) → a final composite shader handling
 glitch, aberration, dithering, grading, CRT, text and grain.
 
+## News crossword
+
+`/crossword` builds a crossword out of the **latest news, on the spot**. It is sized to be solved in
+about a minute, and everyone gets the same grid so the times are comparable. Without a backend the
+page falls back to a demo grid built from sample headlines.
+
+```
+cron (hourly) -> fetch RSS -> store headlines in D1
+                                  |
+        filter by window (24 hours / 1 week / 1 month)
+                                  |
+  score katakana words by frequency, freshness and outlet spread
+                -> interlock the top ones -> grid
+                                  |
+        an LLM writes the clue and the explanation
+        (falls back to a masked headline)
+```
+
+- **Only katakana words go on the grid.** Reading kanji aloud needs a dictionary, and a dictionary
+  means a dependency — which this project does not take. News headlines are dense with katakana
+  (people, companies, sports, products), so that restriction still leaves plenty to play with.
+  Small kana are written full size in one square, as Japanese crosswords normally do
+- **You solve it by dropping letter tiles**, Mojipittan style. The rack holds exactly the letters the
+  blanks need plus a few decoys; tap or drag them onto the grid. A word locks the moment it is right
+- **On a keyboard you can just type it in rōmaji.** Pick a square, type `wa-rudokappu`, and ワールドカツプ
+  lands letter by letter. Waiting on an IME's candidate window would cost you the time you are racing
+  against, so the converter (`public/romaji.js`) is written here (space flips across/down, arrows move,
+  backspace deletes)
+- **Every solved word opens up.** The LLM's explanation, the top 3 articles behind it (picked so the
+  outlets differ), and a chart of how much it was talked about (hourly for a day, daily otherwise)
+- **Puzzles are cached per window** (3h for the day, 12h for the week, 24h for the month), so
+  everyone races on the same grid and the AI is only called a handful of times a day
+- Only the **headline, outlet, timestamp and link** are stored — never the article body. Rows expire
+  after 35 days
+
+| Endpoint | Description |
+|---|---|
+| `GET /api/news/puzzle?range=1d\|1w\|1m` | The puzzle (grid, clues, evidence, buzz). Cached per window |
+| `GET /api/news/scores?puzzle=<id>` | The 20 fastest times on that grid |
+| `POST /api/news/scores` | Submit a time; accepted only when the hash of the solved grid matches |
+| `POST /api/news/refresh` | Collect now instead of waiting for cron (needs `x-gallery-key`) |
+
+Without D1 (`DB`) the whole feature turns itself off (see `news` in `/api/config`).
+
 ## Usage analytics
 
 Only there to answer "which features do people actually use". All three parts are
@@ -294,6 +352,7 @@ npx wrangler deploy
 
 node scripts/test-project-format.mjs   # Project JSON round-trip
 node scripts/test-mcp-server.mjs       # MCP tools and JSON-RPC over stdio
+node scripts/test-crossword.mjs        # feed parsing, word extraction and grid building
 node scripts/test-web-app.mjs          # regression test that renders in headless Chrome
 ```
 

@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>NOIZ LAB — 時事クロスワード</title>
+<meta name="description" content="直近24時間・1週間・1か月のニュースから自動生成されるクロスワード。文字タイルを置いて1分で解く。正解した語は根拠の記事と話題量まで見られます。" />
+<meta property="og:title" content="NOIZ LAB — 時事クロスワード" />
+<meta property="og:description" content="ニュースから自動生成されるクロスワードを、タイムを競って解く。正解した語は根拠の記事TOP3と話題量チャート付き。" />
+<meta property="og:type" content="website" />
+<meta property="og:site_name" content="NOIZ LAB" />
+<meta property="og:url" content="/crossword" />
+<meta property="og:image" content="/og.png" />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="theme-color" content="#0b0d0c" />
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 32 32'><rect width='32' height='32' fill='%230b0d0c'/><rect x='4' y='4' width='11' height='11' fill='%23c8ff00'/><rect x='17' y='4' width='11' height='11' fill='%2335e0ff'/><rect x='4' y='17' width='11' height='11' fill='%23ff3ea5'/><rect x='17' y='17' width='11' height='11' fill='%23e8e6df'/></svg>" />
+<link rel="apple-touch-icon" href="./icon-192.png" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=DotGothic16&family=IBM+Plex+Mono:wght@400;600&family=Zen+Kaku+Gothic+New:wght@400;500;900&family=Zen+Maru+Gothic:wght@700;900&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="./style.css" />
+<link rel="stylesheet" href="./crossword.css" />
+</head>
+<body class="cw-body">
+<div class="crt-overlay" aria-hidden="true"></div>
+
+<header class="topbar">
+  <a class="logo" href="./index.html" data-text="NOIZ LAB">NOIZ LAB</a>
+  <span class="logo-sub">時事クロスワード</span>
+  <nav class="topbar-links">
+    <a href="./index.html">エディタ</a>
+    <a href="./about.html">About</a>
+    <a href="https://github.com/Pregum/image_effector" target="_blank" rel="noopener">GitHub</a>
+  </nav>
+  <div class="topbar-actions">
+    <div class="range-tabs" id="cw-ranges" role="tablist" aria-label="出題の期間">
+      <button class="range-tab is-on" role="tab" data-range="1d" aria-selected="true">24時間</button>
+      <button class="range-tab" role="tab" data-range="1w" aria-selected="false">1週間</button>
+      <button class="range-tab" role="tab" data-range="1m" aria-selected="false">1か月</button>
+    </div>
+  </div>
+</header>
+
+<main class="cw-main">
+  <section class="cw-play">
+    <div class="cw-hud">
+      <div class="cw-timer" id="cw-timer" role="timer" aria-label="経過タイム">0:00<small>.0</small></div>
+      <div class="cw-meta">
+        <span class="cw-progress" id="cw-progress">0 / 0 語</span>
+        <span class="cw-corpus" id="cw-corpus"></span>
+      </div>
+      <div class="cw-tools">
+        <button id="cw-hint" class="btn btn-alt" title="1マスだけ開ける（+5秒）">💡 ヒント</button>
+        <button id="cw-shuffle" class="btn" title="手持ちの文字を並べ替える">⤮ 並べ替え</button>
+        <button id="cw-reset" class="btn" title="置いた文字を戻して最初からやり直す">↺ やり直し</button>
+      </div>
+    </div>
+
+    <div class="cw-board-wrap">
+      <div class="cw-board" id="cw-board" aria-label="クロスワードの盤面"></div>
+      <div class="cw-veil" id="cw-veil">
+        <p class="cw-veil-title" id="cw-veil-title">読み込み中…</p>
+        <p class="cw-veil-note" id="cw-veil-note">直近のニュースから盤面を組んでいます。</p>
+        <button id="cw-start" class="btn btn-primary" hidden>▶ スタート</button>
+      </div>
+    </div>
+
+    <div class="cw-rack" id="cw-rack" aria-label="手持ちの文字"></div>
+    <p class="cw-howto">文字をタップして選び、置きたいマスをタップ。ドラッグでも置けます。置いた文字はもう一度タップで戻ります。</p>
+    <p class="cw-howto">キーボードなら、マスを選んでローマ字で直接打てます（<kbd>space</kbd> で縦横、<kbd>←↑↓→</kbd> で移動、<kbd>backspace</kbd> で消す）。</p>
+  </section>
+
+  <section class="cw-side">
+    <div class="cw-panel">
+      <h2 class="section-title">CLUES <span class="jp">／ ヒント</span></h2>
+      <ol class="cw-clues" id="cw-clues"></ol>
+    </div>
+
+    <div class="cw-panel cw-detail" id="cw-detail" hidden>
+      <h2 class="section-title">EVIDENCE <span class="jp">／ 正解した語の裏側</span></h2>
+      <div id="cw-detail-body"></div>
+    </div>
+
+    <div class="cw-panel">
+      <h2 class="section-title">RANKING <span class="jp">／ この盤のタイム</span></h2>
+      <ol class="cw-ranking" id="cw-ranking"></ol>
+    </div>
+  </section>
+</main>
+
+<div class="cw-result" id="cw-result" hidden role="dialog" aria-modal="true" aria-labelledby="cw-result-title">
+  <div class="cw-result-panel">
+    <h2 id="cw-result-title">全問正解！</h2>
+    <p class="cw-result-time" id="cw-result-time">0:00.0</p>
+    <p class="cw-result-note" id="cw-result-note"></p>
+    <form class="cw-result-form" id="cw-result-form">
+      <input id="cw-name" type="text" maxlength="12" placeholder="なまえ（12文字まで）" autocomplete="off" />
+      <button type="submit" class="btn btn-primary">タイムを登録</button>
+    </form>
+    <div class="cw-result-actions">
+      <button id="cw-share" class="btn">𝕏 シェア</button>
+      <button id="cw-result-close" class="btn">閉じる</button>
+    </div>
+  </div>
+</div>
+
+<script type="module" src="./crossword.js"></script>
+</body>
+</html>

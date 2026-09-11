@@ -6,27 +6,21 @@
 ## [Unreleased]
 
 ### 追加
-- **時事クロスワード**（`/crossword`）: 直近24時間・1週間・1か月のニュースから、1分で解ける
-  クロスワードを自動生成する。cronが毎時RSSを集めて見出しだけをD1に貯め、カタカナ語を
-  「頻度・鮮度・媒体の数」で採点して上位を交差配置する。ヒントと解説はLLMが書き、
-  AIが無い構成では見出しの伏せ字がそのままヒントになる
-- **もじぴったん風の操作**: 空きマスぶんの文字＋おじゃま数枚がラックに並び、タップかドラッグで
-  マスへ置く。語が正しく埋まった瞬間に確定し、そのままタイムを競える
-- **正解した語の裏側**: 解説・根拠になった記事TOP3（媒体が散るように選ぶ）・期間内の話題量チャート
-  （1日なら1時間刻み、1週間/1か月なら1日刻み）を、正解と同時に表示する
-- **タイムのランキング**: 出題は期間ごとにキャッシュされるので、全員が同じ盤を解いて比べられる
-  （`GET/POST /api/news/scores`。盤の答えのハッシュが合ったタイムだけ受け付ける）
-- **ローマ字での直接入力**: マスを選んで `wa-rudokappu` と打つと、打鍵ごとにカタカナが盤へ入る。
-  IMEの変換窓を待つとその分タイムが延びるので、変換器を自前で持った（`public/romaji.js`）。
-  スペースで縦横、矢印で移動、backspaceで消す
-- 環境変数 `NEWS_FEEDS` で読みに行くRSS/Atomを差し替えられる（既定はGoogleニュース9本）
-- 時事クロスワードの利用イベント（`cw_open` / `cw_start` / `cw_hint` / `cw_clear`）を
-  許可リストに追加。計測先が無い構成では、これまでどおり何も送らない
+- **GitHubのボタンからデプロイ**（`.github/workflows/deploy.yml`）: リポジトリのSecretに
+  `CLOUDFLARE_API_TOKEN` を入れておくと、Actions → deploy → Run workflow でデプロイできる。
+  初回は `schema.sql` の適用も同じ実行で済む。自動では走らない
 
 ### 変更
-- LLMの返事からJSONを取り出す `extractJson` を `src/json.js` に切り出し、Workerと
-  時事クロスワードで共用するようにした
-- D1（`DB`）が無い構成では時事クロスワードを自動的に無効にする（`/api/config` の `news`）
+- **時事クロスワードを別リポジトリへ切り出した**（[Pregum/news-crossword](https://github.com/Pregum/news-crossword)）。
+  ニュースの収集・出題・ランキングとcronはこのリポジトリから外れ、`/crossword` は無くなった。
+  D1の `news_articles` / `crossword_puzzles` / `crossword_scores` テーブルも使わなくなった
+  （残っていても害はない。消すなら `DROP TABLE`）
+- LLMの返事からJSONを取り出す `extractJson` を `src/json.js` に切り出した
+
+*English: the news crossword moved to its own repository
+([Pregum/news-crossword](https://github.com/Pregum/news-crossword)); `/crossword`, the news
+collection cron and its three D1 tables are gone from here. Added a manual deploy workflow
+(Actions → deploy → Run workflow) and moved `extractJson` into `src/json.js`.*
 
 ## [1.2.0] — 2026-09-02
 

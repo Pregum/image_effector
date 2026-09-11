@@ -16,7 +16,6 @@ jobs:
       # 依存パッケージは無いので install は不要
       - run: node scripts/test-project-format.mjs
       - run: node scripts/test-mcp-server.mjs
-      - run: node scripts/test-crossword.mjs
       # ランナーに入っている Chrome で実際に描画させる
       - run: node scripts/test-web-app.mjs
         env:

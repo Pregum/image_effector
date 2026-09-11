@@ -240,6 +240,30 @@ const CW_HARNESS = `
       out.push("tookBack=" + !state.filled.has(key(other.x, other.y)));
     }
 
+    // キーボード（ローマ字）で1文字置けるか
+    const ROMAJI = { ア:"a", イ:"i", ウ:"u", エ:"e", オ:"o", カ:"ka", キ:"ki", ク:"ku", ケ:"ke", コ:"ko",
+      サ:"sa", シ:"shi", ス:"su", セ:"se", ソ:"so", タ:"ta", チ:"chi", ツ:"tsu", テ:"te", ト:"to",
+      ナ:"na", ニ:"ni", ヌ:"nu", ネ:"ne", ノ:"no", ハ:"ha", ヒ:"hi", フ:"fu", ヘ:"he", ホ:"ho",
+      マ:"ma", ミ:"mi", ム:"mu", メ:"me", モ:"mo", ヤ:"ya", ユ:"yu", ヨ:"yo",
+      ラ:"ra", リ:"ri", ル:"ru", レ:"re", ロ:"ro", ワ:"wa", ン:"nn", "ー":"-" };
+    const typable = state.rack.find((t) => !t.used && ROMAJI[t.ch]);
+    const spot = state.puzzle.cells.find((c) => c.ch && !state.filled.has(key(c.x, c.y)));
+    if (typable && spot) {
+      setCursor(spot.x, spot.y);
+      out.push("cursor=" + !!document.querySelector(".cw-cell.is-cursor"));
+      for (const k of ROMAJI[typable.ch]) {
+        document.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true }));
+      }
+      out.push("typed=" + (state.filled.get(key(spot.x, spot.y))?.ch === typable.ch));
+      out.push("moved=" + !(state.cursor?.x === spot.x && state.cursor?.y === spot.y));
+      const before = state.dir;
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: " ", bubbles: true, cancelable: true }));
+      out.push("flipped=" + (state.dir !== before));
+      setCursor(spot.x, spot.y);
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Backspace", bubbles: true, cancelable: true }));
+      out.push("erased=" + !state.filled.has(key(spot.x, spot.y)));
+    }
+
     for (const c of state.puzzle.cells) {
       if (!c.ch || state.filled.has(key(c.x, c.y))) continue;
       const i = state.rack.findIndex((t) => t.ch === c.ch && !t.used);
@@ -385,6 +409,11 @@ async function main() {
         check("タイルをタップして選べる", f.picked === "true", f.picked);
         check("選んだ字をマスに置ける", f.tapPlaced === "true", f.tapPlaced);
         check("違う字では正解にならない", f.wrongKept === "true", f.wrongKept);
+        check("カーソルが出る", f.cursor === "true", f.cursor);
+        check("ローマ字で打った字が入る", f.typed === "true", f.typed);
+        check("打つとカーソルが次へ進む", f.moved === "true", f.moved);
+        check("スペースで縦横が切り替わる", f.flipped === "true", f.flipped);
+        check("backspaceで消せる", f.erased === "true", f.erased);
         check("置いた字を戻せる", f.tookBack === "true", f.tookBack);
         check("手持ちの字だけで盤が埋まる", f.filledAll === "true", f.filledAll);
         check("全部の語が正解になる", f.solved === "true", f.solved);

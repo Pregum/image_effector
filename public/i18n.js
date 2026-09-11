@@ -380,6 +380,10 @@ const EN = {
   "手持ちの文字": "Your letters",
   "文字をタップして選び、置きたいマスをタップ。ドラッグでも置けます。置いた文字はもう一度タップで戻ります。":
     "Tap a letter, then tap a square — or just drag it there. Tap a placed letter to take it back.",
+  "キーボードなら、マスを選んでローマ字で直接打てます（": "On a keyboard, pick a square and type it in rōmaji (",
+  " で縦横、": " flips across/down, ",
+  " で移動、": " moves, ",
+  " で消す）。": " deletes).",
   "／ ヒント": "／ Clues",
   "／ 正解した語の裏側": "／ Behind the answer",
   "／ この盤のタイム": "／ Times on this grid",

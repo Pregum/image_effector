@@ -17,6 +17,7 @@ import {
   solutionString,
   wordsInTitle,
 } from "../public/crossword-core.js";
+import { feedRomaji, kanaToKatakana } from "../public/romaji.js";
 
 const NOW = Date.UTC(2026, 8, 10, 12, 0, 0);
 const hoursAgo = (h) => NOW - h * 3_600_000;
@@ -206,6 +207,41 @@ const hoursAgo = (h) => NOW - h * 3_600_000;
 
   assert.equal(maskedClue(articles, "リニア", "リニア"), "〇〇〇の続報");
   assert.match(maskedClue([], "リニア", "リニア"), /3文字/);
+}
+
+// ---------------------------------------------------------------- ローマ字入力
+{
+  const type = (text) => {
+    let pending = "";
+    let out = "";
+    for (const ch of text) {
+      const r = feedRomaji(pending, ch);
+      out += r.kana;
+      pending = r.pending;
+    }
+    return { out, pending };
+  };
+
+  assert.equal(type("wa-rudokappu").out, "ワールドカップ", "長音と促音が打てる");
+  assert.equal(type("nyu-su").out, "ニュース", "拗音が打てる");
+  assert.equal(type("shanpu-").out, "シャンプー");
+  assert.equal(type("jikokurosuwa-do").out, "ジコクロスワード");
+  assert.equal(type("tesuto").out, "テスト", "te が texi の前置きとして止まらない");
+  assert.equal(type("kya").out, "キャ");
+  assert.equal(type("nn").out, "ン");
+
+  // 語尾の n は次の打鍵まで確定しない（画面側は仮に ン を置いて、必要なら差し替える）
+  const amazon = type("amazon");
+  assert.equal(amazon.out, "アマゾ");
+  assert.equal(amazon.pending, "n");
+  assert.equal(feedRomaji("n", "a").kana, "ナ", "続けて母音が来れば な行になる");
+  assert.equal(feedRomaji("n", "g").kana, "ン", "子音が来れば ン が確定する");
+
+  // 打ち間違いで詰まらない
+  assert.equal(type("qq").pending, "", "解釈できない綴りは捨てる");
+  assert.equal(feedRomaji("", "1").kana, "", "英字以外は無視する");
+
+  assert.equal(kanaToKatakana("にゅうす"), "ニュウス", "かな入力もカタカナに寄せる");
 }
 
 console.log("NOIZ LAB news crossword tests passed");

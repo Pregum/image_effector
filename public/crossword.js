@@ -5,7 +5,9 @@
 // 遊び方は「もじぴったん」の要領で、手持ちの文字タイルをマスに置いていく。
 
 import { LANG, localizeDom, t } from "./i18n.js";
-import { buildPuzzle } from "./crossword-core.js";
+import { buildPuzzle, normalizeWord } from "./crossword-core.js";
+import { feedRomaji, kanaToKatakana } from "./romaji.js";
+import { setAnalyticsEnabled, track } from "./analytics.js";
 
 const $ = (id) => document.getElementById(id);
 const key = (x, y) => `${x},${y}`;
@@ -40,6 +42,11 @@ const state = {
   rack: [],           // { ch, used }
   picked: -1,
   solved: new Set(),  // 解けた語の番号+向き
+  cursor: null,       // キーボードで打つ位置 { x, y }
+  dir: "h",           // 打つ向き。スペースで切り替える
+  pending: "",        // 打ちかけのローマ字
+  tentative: null,    // 仮に置いた ン（次の打鍵で確定 or 差し替え）
+  lastClick: "",      // 同じマスを2回押したら向きを変えるため
   startedAt: 0,
   penaltyMs: 0,
   finalMs: 0,
@@ -131,6 +138,10 @@ function setPuzzle(puzzle, reason = "") {
   state.filled = new Map();
   state.solved = new Set();
   state.picked = -1;
+  state.cursor = null;
+  state.dir = "h";
+  state.pending = "";
+  state.tentative = null;
   state.penaltyMs = 0;
   state.finalMs = 0;
   state.mine = null;
@@ -158,6 +169,7 @@ function setPuzzle(puzzle, reason = "") {
   el.start.hidden = false;
   el.veil.hidden = false;
   localizeDom(document.body);
+  track("cw_open", state.demo ? "demo" : puzzle.range);
   loadRanking();
 }
 
@@ -215,6 +227,7 @@ function paintCell(x, y) {
   node.classList.toggle("is-filled", !!placed && !placed.given);
   node.classList.toggle("is-empty", !placed);
   node.classList.toggle("is-solved", isSolvedCell(x, y));
+  node.classList.toggle("is-cursor", state.cursor?.x === x && state.cursor?.y === y);
 }
 
 function isSolvedCell(x, y) {
@@ -344,6 +357,105 @@ function placeAt(x, y, rackIdx) {
   renderRack();
   checkEntries(x, y);
   return true;
+}
+
+// --- キーボードで打つ -------------------------------------------------------
+// 手持ちのタイルという制約はそのままに、打鍵でも置けるようにする。
+// カーソルのあるマスへローマ字を打つと、その場でカタカナになって入る。
+function setCursor(x, y) {
+  const prev = state.cursor;
+  state.cursor = state.cells.get(key(x, y))?.ch ? { x, y } : null;
+  state.pending = "";
+  state.tentative = null;
+  // そのマスに今の向きの語が無ければ、ある方へ向きを合わせる
+  // （縦にしか語が無いマスを選んで、横に打とうとして詰まるのを防ぐ）
+  if (state.cursor && !wordAt(x, y, state.dir) && wordAt(x, y, flip(state.dir))) {
+    state.dir = flip(state.dir);
+  }
+  if (prev) paintCell(prev.x, prev.y);
+  if (state.cursor) paintCell(x, y);
+}
+
+const flip = (dir) => (dir === "h" ? "v" : "h");
+
+const wordAt = (x, y, dir) =>
+  state.puzzle.entries.find(
+    (e) => e.dir === dir && cellsOf(e).some((c) => c.x === x && c.y === y)
+  );
+
+const cellAhead = (x, y, dir, step) => {
+  const nx = dir === "h" ? x + step : x;
+  const ny = dir === "v" ? y + step : y;
+  return state.cells.get(key(nx, ny))?.ch ? { x: nx, y: ny } : null;
+};
+
+// 打ったあとは、同じ向きの次に埋められるマスへ進む
+function advanceCursor(step = 1) {
+  let cur = state.cursor;
+  if (!cur) return;
+  for (let i = 0; i < 32; i++) {
+    const next = cellAhead(cur.x, cur.y, state.dir, step);
+    if (!next) return;
+    cur = next;
+    if (!lockedAt(cur.x, cur.y)) {
+      setCursor(cur.x, cur.y);
+      return;
+    }
+  }
+}
+
+// カーソルのマスに1文字置く。手持ちに無い字は置けない（そこがこのゲームの制約）
+function typeKana(ch) {
+  const cur = state.cursor;
+  if (!cur || lockedAt(cur.x, cur.y)) return false;
+  const idx = state.rack.findIndex((tile) => tile.ch === ch && !tile.used);
+  if (idx < 0) {
+    el.rack.classList.remove("is-short");
+    void el.rack.offsetWidth;
+    el.rack.classList.add("is-short"); // 手持ちに無いことを一瞬だけ知らせる
+    setTimeout(() => el.rack.classList.remove("is-short"), 400);
+    return false;
+  }
+  const at = { ...cur };
+  placeAt(cur.x, cur.y, idx);
+  // placeAt はカーソルを動かさないので、ここで次のマスへ送る
+  if (state.cursor && state.cursor.x === at.x && state.cursor.y === at.y) advanceCursor();
+  return true;
+}
+
+// 「ン」は次の打鍵まで確定しない（amazon の n）。先に置いておき、
+// 続けて母音が来たら置き直す。待たせるより、直すほうが速い。
+function dropTentative() {
+  const at = state.tentative;
+  if (!at) return;
+  state.tentative = null;
+  if (lockedAt(at.x, at.y)) return;
+  takeBack(at.x, at.y);
+  setCursorKeepPending(at.x, at.y);
+}
+
+function setCursorKeepPending(x, y) {
+  const pending = state.pending;
+  setCursor(x, y);
+  state.pending = pending;
+}
+
+function typeRomaji(key) {
+  if (!state.cursor) {
+    const first = state.puzzle.cells.find((c) => c.ch && !lockedAt(c.x, c.y));
+    if (!first) return;
+    setCursor(first.x, first.y);
+  }
+  dropTentative();
+  const out = feedRomaji(state.pending, key);
+  state.pending = out.pending;
+  for (const ch of normalizeWord(kanaToKatakana(out.kana))) {
+    if (!typeKana(ch)) break;
+  }
+  if (state.pending === "n") {
+    const at = state.cursor ? { ...state.cursor } : null;
+    if (at && typeKana("ン")) state.tentative = at;
+  }
 }
 
 function takeBack(x, y) {
@@ -522,6 +634,7 @@ function solutionText() {
 function finish() {
   state.finalMs = elapsed();
   stopTimer();
+  track("cw_clear", state.demo ? "demo" : state.range, Math.round(state.finalMs / 1000));
   showTime(state.finalMs);
   el.result.hidden = false;
   const { head, tenth } = fmtTime(state.finalMs);
@@ -589,8 +702,99 @@ el.board.addEventListener("click", (ev) => {
     if (e) showDetail(e);
     return;
   }
-  if (state.picked >= 0) placeAt(x, y, state.picked);
-  else takeBack(x, y);
+  if (state.picked >= 0) {
+    placeAt(x, y, state.picked);
+    setCursor(x, y);
+    advanceCursor();
+    return;
+  }
+  // 何も持っていないときは、打つ位置を決める（字が入っていれば手持ちへ戻す）
+  const hasLetter = state.filled.has(key(x, y));
+  setCursor(x, y);
+  // 同じマスをもう一度押したら、打つ向きを切り替える
+  if (!hasLetter && state.lastClick === key(x, y)) toggleDir();
+  state.lastClick = key(x, y);
+  if (hasLetter) takeBack(x, y);
+});
+
+// 打つ向きの切り替え。交差しているマスでは、これで縦横を行き来する
+function toggleDir() {
+  state.dir = flip(state.dir);
+  highlightWord();
+}
+
+// いま打っている語をうっすら光らせる（どちら向きに進むかが一目で分かる）
+function highlightWord() {
+  for (const node of el.board.querySelectorAll(".cw-cell.is-inword")) {
+    node.classList.remove("is-inword");
+  }
+  if (!state.cursor) return;
+  const e = wordAt(state.cursor.x, state.cursor.y, state.dir);
+  if (!e) return;
+  for (const c of cellsOf(e)) cellEl(c.x, c.y)?.classList.add("is-inword");
+}
+
+// --- 打鍵 ---
+// 入力欄に文字を打っているときは邪魔しない
+const typingInField = (ev) => ev.target instanceof HTMLInputElement;
+
+document.addEventListener("keydown", (ev) => {
+  if (typingInField(ev) || ev.metaKey || ev.ctrlKey || ev.altKey) return;
+  if (!state.puzzle || !state.running) return;
+
+  const moves = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
+  if (moves[ev.key]) {
+    const [dx, dy] = moves[ev.key];
+    state.dir = dx ? "h" : "v";
+    const from = state.cursor ?? state.puzzle.cells.find((c) => c.ch && !lockedAt(c.x, c.y));
+    if (from) {
+      const next = cellAhead(from.x, from.y, state.dir, dx || dy);
+      setCursor(next ? next.x : from.x, next ? next.y : from.y);
+      highlightWord();
+    }
+    ev.preventDefault();
+    return;
+  }
+
+  if (ev.key === " " || ev.key === "Enter") {
+    toggleDir();
+    ev.preventDefault();
+    return;
+  }
+
+  if (ev.key === "Backspace") {
+    state.pending = "";
+    state.tentative = null;
+    if (state.cursor) {
+      if (state.filled.has(key(state.cursor.x, state.cursor.y)) && !lockedAt(state.cursor.x, state.cursor.y)) {
+        takeBack(state.cursor.x, state.cursor.y);
+      } else {
+        advanceCursor(-1);
+        if (state.cursor) takeBack(state.cursor.x, state.cursor.y);
+      }
+    }
+    ev.preventDefault();
+    return;
+  }
+
+  if (ev.key === "Escape") {
+    setCursor(-1, -1);
+    highlightWord();
+    return;
+  }
+
+  if (ev.key.length === 1 && /[A-Za-z'\-.]/.test(ev.key)) {
+    typeRomaji(ev.key);
+    highlightWord();
+    ev.preventDefault();
+    return;
+  }
+  // かな入力やIMEの直接入力で、カタカナ・ひらがなが1文字ずつ届く環境
+  if (ev.key.length === 1 && /[\u3041-\u30FA\u30FC]/.test(ev.key)) {
+    for (const ch of normalizeWord(kanaToKatakana(ev.key))) typeKana(ch);
+    highlightWord();
+    ev.preventDefault();
+  }
 });
 
 // タイルはタップで選ぶ / ドラッグで直接置く、のどちらでも扱える
@@ -653,6 +857,13 @@ el.ranges.addEventListener("click", (ev) => {
 el.start.addEventListener("click", () => {
   el.veil.hidden = true;
   startTimer();
+  track("cw_start", state.demo ? "demo" : state.range);
+  // すぐ打ち始められるように、最初の空きマスへカーソルを置く
+  const first = state.puzzle.cells.find((c) => c.ch && !lockedAt(c.x, c.y));
+  if (first) {
+    setCursor(first.x, first.y);
+    highlightWord();
+  }
 });
 
 $("cw-shuffle").addEventListener("click", () => {
@@ -700,6 +911,7 @@ $("cw-hint").addEventListener("click", () => {
   if (idx >= 0) state.rack[idx].used = true;
   state.filled.set(key(cell.x, cell.y), { ch: cell.ch, rackIdx: idx, given: false, hinted: true });
   state.penaltyMs += 5000;
+  track("cw_hint", state.demo ? "demo" : state.range);
   el.timer.classList.add("is-penalty");
   setTimeout(() => el.timer.classList.remove("is-penalty"), 600);
   paintCell(cell.x, cell.y);
@@ -758,4 +970,11 @@ try {
   // localStorageが使えない環境でも遊べる
 }
 if (LANG !== "ja") localizeDom(document.body);
+
+// 計測先が無い構成では、ここまでに溜まったイベントごと捨てられる
+fetch("/api/config")
+  .then((r) => r.json())
+  .then((f) => setAnalyticsEnabled(!!f.analytics))
+  .catch(() => setAnalyticsEnabled(false));
+
 loadPuzzle(new URLSearchParams(location.search).get("range") || "1d");
